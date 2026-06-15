@@ -165,8 +165,10 @@
             if (!found) {
                 var s = fx.addProperty("ADBE Slider Control");
                 s.name = names[0];
-                // 滑桿預設值固定為 0:eye=0 睜眼、mouth=0 第一張嘴、眉=0 第一個眉毛、emo=0 無特效
-                try { s.property(1).setValue(0); } catch (e0) {}
+                // 滑桿預設值:eye=0 睜眼、mouth=0 第一張嘴、眉=0 第一個眉毛、
+                // emo=1 預設特效(0 是無特效);其餘一律 0
+                var initVal = (role === "emo") ? 1 : 0;
+                try { s.property(1).setValue(initVal); } catch (e0) {}
             }
         }
         if (!fx.property("face position")) {
@@ -387,6 +389,46 @@
         return shape;
     }
 
+    // 眉毛佔位:在 refLay 位置生「一個」Shape Layer,內含「兩段」線段(左右眉各一條),
+    // 共用一層 stroke 風格。之後自己拉 Bezier 弧度/改形狀當挑眉、怒眉等表情。
+    function createBrowPairLine(comp, refLay, shapeName) {
+        var lineW = 36, gap = 40;
+        try {
+            lineW = Math.max(refLay.width * 0.5, 24);
+            gap   = Math.max(refLay.width * 0.9, lineW * 1.6);
+        } catch (e) {}
+        var half = lineW / 2, off = gap / 2;
+
+        var shape = comp.layers.addShape();
+        shape.name = shapeName;
+        var vectors = shape.property("ADBE Root Vectors Group");
+
+        // 兩段:左眉(置於 -off)、右眉(置於 +off),各自一個 path group
+        var segs = [{ nm: "眉_左", cx: -off }, { nm: "眉_右", cx: off }];
+        for (var s = 0; s < segs.length; s++) {
+            var grp = vectors.addProperty("ADBE Vector Group");
+            grp.name = segs[s].nm;
+            var pathGrp = grp.property("ADBE Vectors Group");
+            var pathProp = pathGrp.addProperty("ADBE Vector Shape - Group");
+            var myShape = new Shape();
+            myShape.vertices    = [[segs[s].cx - half, 0], [segs[s].cx + half, 0]];
+            myShape.inTangents  = [[0, 0], [0, 0]];
+            myShape.outTangents = [[0, 0], [0, 0]];
+            myShape.closed = false;
+            pathProp.property("ADBE Vector Shape").setValue(myShape);
+            var stroke = pathGrp.addProperty("ADBE Vector Graphic - Stroke");
+            stroke.property("ADBE Vector Stroke Color").setValue([0.494, 0.349, 0.298, 1]);
+            stroke.property("ADBE Vector Stroke Width").setValue(6);
+            stroke.property("ADBE Vector Stroke Line Cap").setValue(2); // Round Cap
+        }
+
+        var pos = refLay.property("ADBE Transform Group").property("ADBE Position").value;
+        shape.property("ADBE Transform Group").property("ADBE Position").setValue(pos);
+        if (refLay.parent) shape.parent = refLay.parent;
+        shape.moveBefore(refLay);
+        return shape;
+    }
+
     // 只有張嘴/說話嘴圖的角色:在嘴軸中心生一條閉嘴線,長度參考嘴圖寬,讓你自己調 Bezier 弧度。
     function createClosedMouth(comp, openLay) {
         return createPlaceholderLine(comp, openLay, "嘴", "closed_mouth", 0.75);
@@ -484,9 +526,8 @@
                 var infoArr = applyTalkSquash(comp, mouthName);
                 var lines = [];
                 for (var n = 0; n < infoArr.length; n++) lines.push("「" + infoArr[n].name + "」= " + infoArr[n].val);
-                alert("已新增 " + made + " 張說話嘴(壓縮開合動態),原嘴型不變。\n" +
-                      "目前所有說話嘴(共用一個「嘴軸」):\n  " + lines.join("\n  ") +
-                      "\n\n演出時把 " + mouthName +
+                showStatus("已新增 " + made + " 張說話嘴(壓縮開合動態),原嘴型不變。共用一個「嘴軸」:" +
+                      lines.join("、") + "。演出時把 " + mouthName +
                       " 滑桿切到對應值就會說話開合;切到原本的嘴型值則是靜態嘴。");
                 return;
             }
@@ -534,7 +575,7 @@
             openLay.name = "說話嘴";
             opacityProp(openLay).expression = switchExpr(mouthName, nextSliderValue(comp, mouthName));
             applyTalkSquash(comp, mouthName);
-            alert("已生成一張深色橢圓「說話嘴」並套上開合動態。\n請調整它的大小/顏色貼合畫風。");
+            showStatus("已生成一張深色橢圓「說話嘴」並套上開合動態。請調整它的大小/顏色貼合畫風。");
         } finally { app.endUndoGroup(); }
     }
 
@@ -552,12 +593,12 @@
             var closedLay = createClosedMouth(comp, refLay);
             closedLay.name = "嘴";
             opacityProp(closedLay).expression = switchExpr(mouthName, allocSliderValue(comp, mouthName, 0));
-            alert("已生成一條「嘴」(閉嘴)線段,綁在 " + mouthName + " 值 0。\n" +
-                  "可用鋼筆工具拉 Bezier 弧度、調 Stroke 配合畫風。");
+            showStatus("已生成一條「嘴」(閉嘴)線段,綁在 " + mouthName +
+                  " 值 0。可用鋼筆工具拉 Bezier 弧度、調 Stroke 配合畫風。");
         } finally { app.endUndoGroup(); }
     }
 
-    // 補眉:在現有「眉」(或選取圖層)位置生 2 條圓端短線段佔位(眉2、眉3),已綁滑桿連號值
+    // 補眉:在現有「眉」(或選取圖層)位置生「一個」Shape Layer(內含左右兩段線段),綁滑桿連號值。
     function doGenBrows() {
         var comp = activeComp(); if (!comp) return;
         app.beginUndoGroup("生成眉毛佔位");
@@ -567,19 +608,13 @@
             var refLay = findFeature(comp, "眉") ||
                          (comp.selectedLayers.length ? comp.selectedLayers[0] : null);
             if (!refLay) { alert("先標記一個「眉」,或選取一張眉圖層,再按「補眉」。"); return; }
-            var startIdx = collectFeature(comp, "眉").length + 1; // 接在現有眉之後編號
-            var made = [];
-            for (var k = 0; k < 2; k++) {
-                var nm = "眉 " + (startIdx + k);
-                var ph = createPlaceholderLine(comp, refLay, nm, "brow_placeholder", 0.6);
-                opacityProp(ph).expression = switchExpr(browSliderName, allocSliderValue(comp, browSliderName, 0));
-                made.push(nm);
-            }
-            alert("已生成 2 條圓端短線段佔位(" + made.join("、") + "),放在眉毛位置、綁好 " +
-                  browSliderName + " 滑桿連號值。\n" +
-                  "改形狀/位置當挑眉/怒眉等表情即可。\n\n" +
-                  "之後要再加表情:複製其中一張眉,選取後再按一次「補眉」(或「標記」的「眉」),\n" +
-                  "面板會自動接續編號與滑桿值,不用手動改表達式。");
+            var idx = collectFeature(comp, "眉").length + 1; // 接在現有眉之後編號
+            var nm = "眉 " + idx;
+            var ph = createBrowPairLine(comp, refLay, nm);
+            opacityProp(ph).expression = switchExpr(browSliderName, allocSliderValue(comp, browSliderName, 0));
+            showStatus("已生成眉毛佔位「" + nm + "」(一個形狀圖層、左右兩段線段),綁在 " +
+                  browSliderName + " 滑桿。改形狀/位置即可當挑眉、怒眉等表情;" +
+                  "要再加一種表情就複製它、選取後再按一次「補眉」。");
         } finally { app.endUndoGroup(); }
     }
 
@@ -610,10 +645,9 @@
                     linked++;
                 }
             }
-            alert("已建/沿用「face」null,把 " + linked + " 個五官圖層掛上去" +
-                  (skipped ? "(" + skipped + " 個已掛在軸或其他父層,保留不動)" : "") + "。\n\n" +
-                  "「face」目前沒有父層 —— 請自行把它的 parent 設成頭(head)或身體(body),\n" +
-                  "看這個角色的五官要跟著頭轉還是跟著身體動。");
+            showStatus("已建/沿用「face」null,把 " + linked + " 個五官圖層掛上去" +
+                  (skipped ? "(" + skipped + " 個已掛在軸或其他父層,保留不動)" : "") +
+                  "。「face」目前沒有父層 —— 請自行把它的 parent 設成頭(head)或身體(body)。");
         } finally { app.endUndoGroup(); }
     }
 
@@ -654,8 +688,8 @@
                 if (base !== "") sel[i].name = (i === 0) ? base : base + " " + (i + 1);
                 opacityProp(sel[i]).expression = switchExpr(sliderName, v);
             }
-            alert("完成!演出時把 control > " + sliderName + " 滑桿切到 " + v +
-                  " 就會顯示「" + base + "」。\n(滑桿 key 記得用 HOLD)");
+            showStatus("完成!演出時把 control > " + sliderName + " 滑桿切到 " + v +
+                  " 就會顯示「" + base + "」。(滑桿 key 記得用 HOLD)");
         } finally { app.endUndoGroup(); }
     }
 
@@ -683,47 +717,8 @@
                 opacityProp(sel[i]).expression = switchExpr(sliderName, i);
                 lines.push(base + (i + 1) + " → " + sliderName + " = " + i);
             }
-            alert("完成!對應表:\n" + lines.join("\n") + "\n(依時間軸由上到下的順序編號)");
+            showStatus("完成!對應表:" + lines.join("、") + "(依時間軸由上到下的順序編號)");
         } finally { app.endUndoGroup(); }
-    }
-
-    // ── 軸心聚焦:標記軸心時,只讓選中圖層 100% 顯示,其他降到 25% ──
-    // 再按一次還原。只動「沒有掛表達式」的不透明度,避免跟滑桿切換打架。
-    var _focusMemory = null;
-
-    function doFocusToggle() {
-        var comp = activeComp(); if (!comp) return;
-
-        if (_focusMemory) {
-            app.beginUndoGroup("還原軸心聚焦");
-            try {
-                for (var i = 0; i < _focusMemory.length; i++) {
-                    try { opacityProp(_focusMemory[i].layer).setValue(_focusMemory[i].value); } catch (e) {}
-                }
-            } finally { app.endUndoGroup(); }
-            _focusMemory = null;
-            showStatus("已還原圖層不透明度。");
-            return;
-        }
-
-        var sel = comp.selectedLayers;
-        if (sel.length === 0) { alert("先選取要設定軸心的圖層,再按「軸心聚焦」。"); return; }
-
-        app.beginUndoGroup("軸心聚焦");
-        try {
-            _focusMemory = [];
-            for (var i = 1; i <= comp.numLayers; i++) {
-                var lay = comp.layer(i);
-                var op;
-                try { op = opacityProp(lay); } catch (e) { continue; }
-                if (op.expressionEnabled) continue; // 交給滑桿控制的不透明度不動
-                _focusMemory.push({ layer: lay, value: op.value });
-                var isSel = false;
-                for (var s = 0; s < sel.length; s++) if (sel[s] === lay) { isSel = true; break; }
-                op.setValue(isSel ? 100 : 25);
-            }
-        } finally { app.endUndoGroup(); }
-        showStatus("已聚焦選取圖層,其他降到 25%。設定完軸心後再按一次「軸心聚焦」還原。");
     }
 
     // ================= 2. 一鍵動態 =================
@@ -755,13 +750,9 @@
                     .concat(blinkWindowLines(uniqueSeed(), 2.5, 6, 7))
                     .concat(["auto == 1 ? Math.max(value, blink) : value"]);
                 slider.expression = lines.join("\n");
-                alert("已在 control > " + eyeName + " 滑桿掛上隨機眨眼。\n\n" +
-                      "control 上多了「眨眼」勾選框:\n" +
-                      "  ✔ 勾選 = 自動隨機眨(你打的手動 key 也同時有效,兩者取最大值)\n" +
-                      "  ✗ 取消 = 純手動模式\n\n" +
-                      "【取消勾選時如何演閉眼?】\n" +
-                      "直接在 eye 滑桿上打 HOLD key → 值設 1 = 閉眼、值設 0 = 睜眼。\n" +
-                      "不需要另外新增圖層,「閉眼」圖層已自動在 eye=1 時顯示。");
+                showStatus("已在 control > " + eyeName + " 滑桿掛上隨機眨眼。control 上多了「眨眼」勾選框:" +
+                      "勾選=自動隨機眨(手動 key 同時有效,取最大值)、取消=純手動。" +
+                      "取消勾選時在 eye 滑桿打 HOLD key:1=閉眼、0=睜眼。");
             } else {
                 // 備援方案:沒有閉眼圖層 → 對「睜眼/眼」做縮放擠壓眨眼(透過眼軸,斜眼不會歪)
                 var eyeLay = findFeature(comp, "睜眼") || findFeature(comp, "眼") ||
@@ -772,9 +763,8 @@
                     .concat(blinkWindowLines(uniqueSeed(), 2.5, 6, 7))
                     .concat(["blink ? [value[0], value[1] * 0.08] : value"]);
                 scaleProp(axis).expression = lines2.join("\n");
-                alert("此角色沒有「閉眼」圖 → 已建「眼軸」Null 套擠壓眨眼(作用在「" + eyeLay.name + "」上)。\n\n" +
-                      "眼睛如果是斜的:把「眼軸」的 Rotation 轉到跟眼睛同角度即可,\n" +
-                      "美術不會跟著轉,擠壓會沿眼睛的方向、不會歪。");
+                showStatus("此角色沒有「閉眼」圖 → 已建「眼軸」Null 套擠壓眨眼(作用在「" + eyeLay.name +
+                      "」上)。眼睛若是斜的,把「眼軸」Rotation 轉到跟眼睛同角度,擠壓就沿眼睛方向、不會歪。");
             }
         } finally { app.endUndoGroup(); }
     }
@@ -829,7 +819,7 @@
                 msg += "\n\n此角色原本沒有閉嘴,我已自動生成一條「嘴」線段(#7E594C 圓角)。\n" +
                        "位置在嘴軸中心,你可以用鋼筆工具拉 Bezier 弧度、調 Stroke 配合畫風。";
             }
-            alert(msg);
+            showStatus(msg);
         } finally { app.endUndoGroup(); }
     }
 
@@ -940,8 +930,12 @@
             }
         } finally { app.endUndoGroup(); }
         var msg = (exprText === "" ? "已清除 " : "已套用到 ") + ok + " 個屬性。";
-        if (fail.length) msg += "\n套不上的:" + fail.join("、") + "(表達式跟屬性維度可能不合)";
-        alert(msg);
+        if (fail.length) {
+            // 有套不上的 → 視為失敗,跳通知
+            alert(msg + "\n套不上的:" + fail.join("、") + "(表達式跟屬性維度可能不合)");
+        } else {
+            showStatus(msg);
+        }
     }
 
     // ================= 5. 快速命名 + 控制 NULL =================
@@ -1135,7 +1129,7 @@
                 }
             }
         } finally { app.endUndoGroup(); }
-        alert("轉換完成，更名了 " + count + " 個圖層。\n對照表以外的圖層不會動。");
+        showStatus("轉換完成，更名了 " + count + " 個圖層。對照表以外的圖層不會動。");
     }
 
     // isAllDigits / nameCount 已在上方定義，這裡沿用
@@ -1162,7 +1156,8 @@
                 }
             }
         } finally { app.endUndoGroup(); }
-        if (count === 0) alert("選取的圖層名稱都不在對照表裡。");
+        if (count === 0) showStatus("選取的圖層名稱都不在對照表裡(沒有更名)。");
+        else showStatus("轉換完成，更名了 " + count + " 個圖層。");
     }
 
     // ── 控制 NULL：建在圖層錨點位置,圖層 parent 上去 ──────────
@@ -1203,10 +1198,10 @@
             var n = makeCtrlNull(comp, sel[0], nm);
             for (var i = 1; i < sel.length; i++) sel[i].parent = n;
         } finally { app.endUndoGroup(); }
-        alert(sel.length + " 個圖層已綁到「" + nm + "」之下,劇情動作打在它身上。");
+        showStatus(sel.length + " 個圖層已綁到「" + nm + "」之下,劇情動作打在它身上。");
     }
 
-    // 算圖層在 comp 座標下的外框(來源:sourceRectAtTime + toComp,跟 doTrimToContent 同作法)
+    // 算圖層在 comp 座標下的外框(來源:sourceRectAtTime + toComp)
     function layerBBox(layer, t) {
         try {
             var r = layer.sourceRectAtTime(t, false);
@@ -1243,7 +1238,7 @@
     }
 
     // ── 依重疊自動綁父層:給對照表/骨架規則涵蓋不到的零件用(褲子線、OOline、寶石、包包…)──
-    // 對每個選取的圖層,在時間軸「它下面」的圖層裡找畫面重疊比例最高的一個當 parent。
+    // 對每個選取的圖層,在同 comp 其他圖層裡找畫面重疊比例最高的一個當 parent(不限上下)。
     // 用目前時間那一格的外框比對,門檻 20% 以下不綁(避免亂猜)。
     var OVERLAP_THRESHOLD = 0.2;
 
@@ -1267,9 +1262,8 @@
                 for (var i = 1; i <= comp.numLayers; i++) {
                     var cand = comp.layer(i);
                     if (cand === lay) continue;
-                    if (cand.index <= lay.index) continue; // 只找「下面」的圖層
                     if (cand.nullLayer || cand.adjustmentLayer) continue;
-                    if (isDescendant(cand, lay)) continue; // 避免互為父子造成循環
+                    if (isDescendant(cand, lay)) continue; // 避免把自己的子孫設成父層(循環)
                     var cbbox = layerBBox(cand, t);
                     if (!cbbox) continue;
                     var ratio = bboxOverlapArea(bbox, cbbox) / area;
@@ -1282,7 +1276,7 @@
                 } else {
                     noMatch.push(lay.name + (best
                         ? "(最高重疊 " + Math.round(bestRatio * 100) + "%,低於門檻)"
-                        : "(下方找不到有重疊的圖層)"));
+                        : "(找不到有重疊的圖層)"));
                 }
             }
         } finally { app.endUndoGroup(); }
@@ -1291,120 +1285,6 @@
         if (skipped.length)  msg += "\n已跳過(原本就有 parent):\n  " + skipped.join("、");
         if (noMatch.length)  msg += "\n沒綁到(請手動設定 parent):\n  " + noMatch.join("、");
         showStatus(msg);
-    }
-
-    // ── 縮小 comp 到有圖層內容的最小範圍 ──────────────────────
-    // 掃所有非 Null 圖層的 sourceRectAtTime,計算最小外框後 resize comp
-    function doTrimToContent() {
-        var comp = activeComp(); if (!comp) return;
-        var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        var found = false;
-        var t = comp.time;
-        app.beginUndoGroup("縮小 comp 到有圖範圍");
-        try {
-            for (var i = 1; i <= comp.numLayers; i++) {
-                var lay = comp.layer(i);
-                if (lay.nullLayer || lay.adjustmentLayer) continue;
-                try {
-                    var r = lay.sourceRectAtTime(t, false);
-                    var corners = [
-                        [r.left,           r.top],
-                        [r.left + r.width, r.top],
-                        [r.left,           r.top + r.height],
-                        [r.left + r.width, r.top + r.height]
-                    ];
-                    for (var c = 0; c < corners.length; c++) {
-                        var pt = lay.toComp(corners[c]);
-                        if (pt[0] < minX) minX = pt[0];
-                        if (pt[1] < minY) minY = pt[1];
-                        if (pt[0] > maxX) maxX = pt[0];
-                        if (pt[1] > maxY) maxY = pt[1];
-                    }
-                    found = true;
-                } catch (e) {}
-            }
-            if (!found) { alert("找不到有可見內容的圖層。"); app.endUndoGroup(); return; }
-
-            var pad = 4;
-            minX = Math.floor(minX - pad); minY = Math.floor(minY - pad);
-            maxX = Math.ceil(maxX + pad);  maxY = Math.ceil(maxY + pad);
-            var newW = maxX - minX, newH = maxY - minY;
-            if (newW < 1 || newH < 1) { alert("計算結果異常,請確認圖層有可見內容。"); app.endUndoGroup(); return; }
-
-            for (var j = 1; j <= comp.numLayers; j++) {
-                var L = comp.layer(j);
-                try {
-                    var pos = L.property("ADBE Transform Group").property("ADBE Position");
-                    if (!pos.expressionEnabled) {
-                        var pv = pos.value;
-                        pos.setValue([pv[0] - minX, pv[1] - minY]);
-                    }
-                } catch (e) {}
-            }
-            comp.width  = newW;
-            comp.height = newH;
-            alert("完成!comp 已縮為 " + newW + " × " + newH + " px。\n" +
-                  "各圖層位置已同步平移,外觀不會跑掉。\n" +
-                  "現在可用「圖層 → Transform → Center Anchor Point in Layer Content」把錨點置中。");
-        } finally { app.endUndoGroup(); }
-    }
-
-    // ── 手動裁切流程（用 AE 內建的 Region of Interest）──────
-    // ROI 是合成視窗上可以拖曳的框，但「拖框」這動作 ScriptUI 無法代勞，
-    // 所以拆成兩步：① 幫你 solo 圖層並提示開 ROI；② 你拉好框後一鍵裁切。
-    var _soloMemory = null; // 記住裁切前哪些圖層原本是 solo
-
-    function doSoloAndROI() {
-        var comp = activeComp(); if (!comp) return;
-        var sel = comp.selectedLayers;
-        if (sel.length === 0) { alert("先選取要單獨顯示、裁切的圖層。"); return; }
-        app.beginUndoGroup("solo 圖層準備裁切");
-        try {
-            // 記住原本的 solo 狀態，待會還原
-            _soloMemory = [];
-            for (var i = 1; i <= comp.numLayers; i++) {
-                _soloMemory.push(comp.layer(i).solo);
-            }
-            // 把選取圖層設 solo，其餘取消
-            for (var j = 1; j <= comp.numLayers; j++) comp.layer(j).solo = false;
-            for (var k = 0; k < sel.length; k++) sel[k].solo = true;
-        } finally { app.endUndoGroup(); }
-        alert("已 solo 選取圖層。\n\n接下來請手動操作:\n" +
-              "1. 在合成視窗底部點「感興趣區域」按鈕\n" +
-              "   (Region of Interest,虛線方框圖示)\n" +
-              "2. 在畫面上拖出你要保留的範圍\n" +
-              "3. 回來按「② 裁切到框 + 還原 solo」\n\n" +
-              "(ROI 的拖曳框 AE 腳本無法代勞,這步要你手動拉)");
-    }
-
-    function doCropToROI() {
-        var comp = activeComp(); if (!comp) return;
-        app.beginUndoGroup("裁切到 ROI");
-        try {
-            // 觸發 AE 內建:Crop Comp to Region of Interest
-            // 固定 menu command ID 2997 跨語言/版本穩定;名稱查找在中文版會失敗,故先用 ID。
-            var ok = false;
-            try { app.executeCommand(2997); ok = true; } catch (e1) {}
-            if (!ok) {
-                // 後援:用名稱查找(英文版才有效)
-                try { app.executeCommand(app.findMenuCommandId("Crop Comp to Region of Interest")); ok = true; } catch (e2) {}
-            }
-            if (!ok) {
-                alert("無法自動裁切。\n請手動執行:\n" +
-                      "  合成(Composition) 選單 → 裁切合成至感興趣區域\n" +
-                      "  (Crop Comp to Region of Interest)\n\n" +
-                      "(裁切後 solo 狀態仍會由本面板還原)");
-            }
-            // 還原 solo 狀態(裁切後圖層數不變,可安全對應)
-            if (_soloMemory && _soloMemory.length === comp.numLayers) {
-                for (var i = 1; i <= comp.numLayers; i++) {
-                    comp.layer(i).solo = _soloMemory[i - 1];
-                }
-            }
-            _soloMemory = null;
-        } finally { app.endUndoGroup(); }
-        alert("裁切完成,solo 已還原。\n" +
-              "如果畫面沒裁切,表示沒先拉 ROI 框 —— 請重按①重新來。");
     }
 
     // ================= 6. 節奏調整 =================
@@ -1458,8 +1338,8 @@
                 }
             }
         } finally { app.endUndoGroup(); }
-        alert(count === 0 ? "選取的圖層上找不到「key + loopOut」的循環屬性。"
-                          : "已重排 " + count + " 個循環屬性,一趟 = " + frames + " 格。");
+        if (count === 0) alert("選取的圖層上找不到「key + loopOut」的循環屬性。");
+        else showStatus("已重排 " + count + " 個循環屬性,一趟 = " + frames + " 格。");
     }
 
     // 在表達式文字裡找「label + 數字」,把數字乘上倍率
@@ -1512,8 +1392,8 @@
                 }
             }
         } finally { app.endUndoGroup(); }
-        alert(count === 0 ? "選取的圖層上找不到可調速的表達式(speed / period / wiggle)。"
-                          : "已調整 " + count + " 個表達式,倍速 ×" + m + "。");
+        if (count === 0) alert("選取的圖層上找不到可調速的表達式(speed / period / wiggle)。");
+        else showStatus("已調整 " + count + " 個表達式,倍速 ×" + m + "。");
     }
 
     // 在 wiggle(freq, amp) 裡把第二個參數(幅度)乘上倍率
@@ -1558,8 +1438,8 @@
                 }
             }
         } finally { app.endUndoGroup(); }
-        alert(count === 0 ? "選取的圖層上找不到可調幅度的表達式(amp / wiggle)。"
-                          : "已調整 " + count + " 個表達式,幅度 ×" + m + "。");
+        if (count === 0) alert("選取的圖層上找不到可調幅度的表達式(amp / wiggle)。");
+        else showStatus("已調整 " + count + " 個表達式,幅度 ×" + m + "。");
     }
 
     // ---- 常用表達式庫(存在 AE 偏好設定,跨專案永久保留) ----
@@ -1707,10 +1587,31 @@
         return result;
     }
 
-    // 收集符合骨架 key 的圖層:內建前綴比對 + 使用者自訂別名
+    // 內建中文骨架別名:讓圖層直接用中文命名(身體/頭/左上臂…)也能對上骨架規則,
+    // 不必再手動設別名。同一個 key 對到兩種命名(腰果式 armL1 / 樂樂式 arm_up_L)時都收。
+    // pattern 用前綴比對(不分大小寫),所以「左上臂」「左上臂01」都算。
+    var BUILTIN_BONE_ALIAS = [
+        { pattern: "身體", key: "body" }, { pattern: "身体", key: "body" },
+        { pattern: "屁股", key: "hip" },  { pattern: "臀",   key: "hip" },
+        { pattern: "頭",   key: "head" }, { pattern: "头",   key: "head" },
+        // 上臂(腰果式 armL1 / 樂樂式 arm_up_L 都對應)
+        { pattern: "左上臂", key: "armL1" }, { pattern: "左上臂", key: "arm_up_L" }, { pattern: "左手臂", key: "arm_up_L" }, { pattern: "左手臂", key: "armL1" },
+        { pattern: "右上臂", key: "armR1" }, { pattern: "右上臂", key: "arm_up_R" }, { pattern: "右手臂", key: "arm_up_R" }, { pattern: "右手臂", key: "armR1" },
+        // 下臂(前臂)
+        { pattern: "左下臂", key: "armL2" }, { pattern: "左下臂", key: "arm_low_L" }, { pattern: "左前臂", key: "arm_low_L" }, { pattern: "左前臂", key: "armL2" },
+        { pattern: "右下臂", key: "armR2" }, { pattern: "右下臂", key: "arm_low_R" }, { pattern: "右前臂", key: "arm_low_R" }, { pattern: "右前臂", key: "armR2" },
+        // 大腿
+        { pattern: "左大腿", key: "legL1" }, { pattern: "左大腿", key: "leg_up_L" },
+        { pattern: "右大腿", key: "legR1" }, { pattern: "右大腿", key: "leg_up_R" },
+        // 小腿
+        { pattern: "左小腿", key: "legL2" }, { pattern: "左小腿", key: "leg_low_L" },
+        { pattern: "右小腿", key: "legR2" }, { pattern: "右小腿", key: "leg_low_R" }
+    ];
+
+    // 收集符合骨架 key 的圖層:內建前綴比對 + 內建中文別名 + 使用者自訂別名
     function findLayersByBoneKey(comp, key) {
         var result = findLayersByPrefix(comp, key);
-        var aliases = boneAliasLoad();
+        var aliases = BUILTIN_BONE_ALIAS.concat(boneAliasLoad());
         for (var i = 0; i < aliases.length; i++) {
             if (aliases[i].key !== key) continue;
             var extra = findLayersByPrefix(comp, aliases[i].pattern);
@@ -1823,8 +1724,13 @@
         if (preset.bodyNull) msg += "（已建「" + BODY_NULL_NAME + "」放在腳底，當總控制點）\n";
         if (skipped.length)  msg += "\n已跳過(原本就有 parent):\n  " + skipped.join("、");
         if (notFound.length) msg += "\n找不到對應的父圖層:\n  " + notFound.join("、");
-        if (linked === 0 && skipped.length === 0) msg = "找不到符合「" + presetKey + "」命名規則的圖層。\n請確認圖層命名是否符合規則(用命名頁轉成英文)。";
-        alert(msg);
+        if (linked === 0 && skipped.length === 0) {
+            // 完全沒綁到 → 視為失敗,跳通知
+            alert("找不到符合「" + presetKey + "」命名規則的圖層。\n" +
+                  "圖層可用中文(身體/頭/左上臂/左大腿…)或英文命名;對不上時用命名頁的「綁定別名」補。");
+        } else {
+            showStatus(msg);
+        }
     }
 
     // ================= UI =================
@@ -1865,6 +1771,17 @@
             return content;
         }
 
+        // 依使用習慣固定分頁順序:改名稱 → 找父子層 → 標記 → 微動態 → 劇情動態 → 表達式。
+        // 先把所有分頁建好(決定顯示順序),各功能區塊再填進對應分頁,不受程式碼撰寫順序影響。
+        var TAB = {
+            name: makeTab("命名"),
+            rig:  makeTab("綁定"),
+            mark: makeTab("標記"),
+            dyn:  makeTab("動態(自動)"),
+            perf: makeTab("演出(手動Key)"),
+            expr: makeTab("表達式")
+        };
+
         function updateScrollbars() {
             // 要用「面板實際高度」算可視範圍:被壓扁時 tab.size 回報的
             // 仍是排版需要的完整高度,用它判斷會永遠以為不用捲
@@ -1899,7 +1816,7 @@
         statusLabel.alignment = ["fill", "bottom"];
 
         // --- 標記 ---
-        var p1 = makeTab("標記");
+        var p1 = TAB.mark;
         p1.add("statictext", undefined, "先選圖層再按按鈕:  [v2.0]");
         var rowA = p1.add("group"); var rowB = p1.add("group");
         var tagOrder = ["閉眼", "睜眼", "嘴", "說話嘴", "眉", "特效", "耳", "鼻"];
@@ -1932,27 +1849,31 @@
         bGenTalk.onClick = doGenTalkMouth;
         bGenClose.onClick = doGenClosedMouth;
         bGenBrow.onClick = doGenBrows;
-        var rowFace = p1.add("group");
-        var bFaceNull = rowFace.add("button", undefined, "綁五官到 face null"); bFaceNull.preferredSize.width = 130;
-        bFaceNull.onClick = doBindFaceNull;
-        rowFace.add("statictext", undefined, "← 五官沒在頭部comp時用,之後自己把 face 接到頭或身體");
-
-        var rowFocus = p1.add("group");
-        var bFocus = rowFocus.add("button", undefined, "軸心聚焦(選中100%,其他25%)");
-        bFocus.preferredSize.width = 200;
-        bFocus.onClick = doFocusToggle;
-        rowFocus.add("statictext", undefined, "← 設軸心前按,選好下一個再按一次,完成後再按一次還原");
 
         // --- 命名 / 控制 NULL ---
-        var p5 = makeTab("命名");
+        var p5 = TAB.name;
 
-        // ── 顯示模式 ──────────────────────────────────────────
+        // ── 顯示模式 ＋ 中英轉換(同一列)──────────────────────
         var rowMode = p5.add("group");
         rowMode.add("statictext", undefined, "按鈕顯示:");
         var radShowZh = rowMode.add("radiobutton", undefined, "中文");
         var radShowEn = rowMode.add("radiobutton", undefined, "英文");
         radShowZh.value = true;
         function showEn() { return radShowEn.value; }
+
+        // 中英轉換:範圍開關 + 兩顆按鈕,跟「按鈕顯示」併同一列
+        rowMode.add("statictext", undefined, "  轉換:");
+        var radScopeSel = rowMode.add("radiobutton", undefined, "選取");
+        var radScopeAll = rowMode.add("radiobutton", undefined, "全comp");
+        radScopeSel.value = true;
+        function convScope(dir) {
+            if (radScopeAll.value) doConvertAll(dir);
+            else                   doConvertSelected(dir);
+        }
+        var bToEn = rowMode.add("button", undefined, "轉英文"); bToEn.preferredSize.width = 64;
+        var bToZh = rowMode.add("button", undefined, "轉中文"); bToZh.preferredSize.width = 64;
+        bToEn.onClick = function () { convScope("toEn"); };
+        bToZh.onClick = function () { convScope("toZh"); };
 
         // ── 分類按鈕區 ────────────────────────────────────────
         // 從 NAME_MAP 抽出所有 category（保持順序、不重複）
@@ -2004,7 +1925,8 @@
 
         function rebuildNames() {
             while (nameGrid.children.length > 0) nameGrid.remove(nameGrid.children[0]);
-            var allItems = fullMap();
+            // 只用內建對照分類(自訂項目另列在「自訂」,不再混進「其他」)
+            var allItems = NAME_MAP;
             var cats = getCategories(allItems);
             for (var c = 0; c < cats.length; c++) {
                 var cat = cats[c];
@@ -2066,35 +1988,9 @@
             alert("自訂清單裡沒有「" + zh + "」。\n(內建項目無法刪除)");
         };
 
-        // ── 中英轉換（一列：範圍開關 + 兩顆按鈕）─────────────
-        var rowConv = p5.add("group");
-        rowConv.add("statictext", undefined, "轉換:");
-        var radScopeSel = rowConv.add("radiobutton", undefined, "選取");
-        var radScopeAll = rowConv.add("radiobutton", undefined, "全comp");
-        radScopeSel.value = true;
-        function convScope(dir) {
-            if (radScopeAll.value) doConvertAll(dir);
-            else                   doConvertSelected(dir);
-        }
-        var bToEn = rowConv.add("button", undefined, "轉英文"); bToEn.preferredSize.width = 70;
-        var bToZh = rowConv.add("button", undefined, "轉中文"); bToZh.preferredSize.width = 70;
-        bToEn.onClick = function () { convScope("toEn"); };
-        bToZh.onClick = function () { convScope("toZh"); };
-
-        // ── Comp 裁切（標籤 + 兩步驟按鈕同列）──────────────────
-        var rowCrop = p5.add("group");
-        var labCrop = rowCrop.add("statictext", undefined, "裁切:"); labCrop.preferredSize.width = 70;
-        var bSoloRoi = rowCrop.add("button", undefined, "①solo+框"); bSoloRoi.preferredSize.width = 90;
-        var bDoCrop  = rowCrop.add("button", undefined, "②裁切還原"); bDoCrop.preferredSize.width = 90;
-        bSoloRoi.onClick = doSoloAndROI;
-        bDoCrop.onClick  = doCropToROI;
-        var rowCrop2 = p5.add("group");
-        var labCrop2 = rowCrop2.add("statictext", undefined, ""); labCrop2.preferredSize.width = 70;
-        var bTrim = rowCrop2.add("button", undefined, "或：自動縮到有圖範圍"); bTrim.preferredSize.width = 180;
-        bTrim.onClick = doTrimToContent;
 
         // ====== 綁定分頁（控制 NULL / 骨架 / 錨點）======
-        var p6 = makeTab("綁定");
+        var p6 = TAB.rig;
 
         // ── 建立角色 control（含常用滑桿）──────────────────────
         var rowCtl = p6.add("group");
@@ -2105,7 +2001,7 @@
             var comp = activeComp(); if (!comp) return;
             app.beginUndoGroup("建 control");
             try { ensureControl(comp); } finally { app.endUndoGroup(); }
-            alert("control 已就緒:eye / mouth / 眉 / emo 滑桿 + face position 點控制。\n" +
+            showStatus("control 已就緒:eye / mouth / 眉 / emo 滑桿 + face position 點控制。" +
                   "(已存在的話只補缺少的滑桿,不會動到既有 key)");
         };
 
@@ -2149,7 +2045,16 @@
         bPart.onClick = doAutoParentByOverlap;
         var rowPart2 = p6.add("group");
         rowPart2.add("statictext", undefined, "").preferredSize.width = 70;
-        rowPart2.add("statictext", undefined, "選零件(褲子線/寶石/包包…),自動綁到下方重疊最多的圖層(已有parent的會跳過)");
+        rowPart2.add("statictext", undefined, "選零件(褲子線/寶石/包包…),自動綁到畫面重疊最多的圖層(不限上下,已有parent的會跳過)");
+
+        // ── 五官綁到 face null(五官沒在頭部 comp 時用)──
+        var rowFace = p6.add("group");
+        rowFace.add("statictext", undefined, "五官:").preferredSize.width = 70;
+        var bFaceNull = rowFace.add("button", undefined, "綁五官到 face null"); bFaceNull.preferredSize.width = 130;
+        bFaceNull.onClick = doBindFaceNull;
+        var rowFace2 = p6.add("group");
+        rowFace2.add("statictext", undefined, "").preferredSize.width = 70;
+        rowFace2.add("statictext", undefined, "五官沒在頭部comp時用,建好後自己把 face 接到頭或身體");
 
         // ── 綁定別名(使用者自訂命名 → 骨架規則 key)───────────
         var rowAlias = p6.add("group");
@@ -2193,7 +2098,7 @@
         };
 
         // --- 動態(自動微動,跑整部影片不用人工) ---
-        var p2 = makeTab("動態(自動)");
+        var p2 = TAB.dyn;
         p2.add("statictext", undefined, "套用後自動循環播放,不用打 key(眨眼/說話開合/呼吸/漂浮/擺動):");
         var rowC = p2.add("group"); var rowD = p2.add("group");
         var bBlink = rowC.add("button", undefined, "隨機眨眼");   bBlink.preferredSize.width = 110;
@@ -2218,7 +2123,7 @@
         p2.add("statictext", undefined, "倍速=改快慢(speed/period/wiggle頻率);倍幅=改動多大(amp/wiggle幅度)。覺得沒差就調倍幅。");
 
         // --- 演出(手動下 key:人待在主場景,key 寫進角色的 control) ---
-        var p3 = makeTab("演出(手動Key)");
+        var p3 = TAB.perf;
 
         var rigComps = [];
         var rowChar = p3.add("group");
@@ -2399,73 +2304,79 @@
                 : "「" + sliderName + "」滑桿的值對應(填到上面「值」欄):\n" + lines.join("\n"));
         };
 
-        // ── 演出快捷鍵(需先「鎖定選取角色圖層」)──────────────
-        p3.add("statictext", undefined, "演出快捷鍵(嚇一跳/翻轉/閃爍,要先鎖定角色圖層):");
+        // ── 演出快捷鍵(對「目前合成裡選取的圖層」下 key,在哪一層都能用)──────────────
+        p3.add("statictext", undefined, "演出快捷鍵(嚇一跳/翻轉/閃爍):在任一合成選取圖層即可,沒選才用上面鎖定的角色:");
         var rowShort = p3.add("group");
         var bShock = rowShort.add("button", undefined, "嚇一跳"); bShock.preferredSize.width = 70;
         var bFlip  = rowShort.add("button", undefined, "左右翻轉"); bFlip.preferredSize.width = 70;
         var bFlash = rowShort.add("button", undefined, "閃爍"); bFlash.preferredSize.width = 70;
 
-        function needLockedLayer() {
-            if (lockedLayerAlive()) return lockedTarget.layerChain[0];
-            alert("這個快捷鍵需要先在外層合成選取角色圖層,\n再按上面的「鎖定選取角色圖層」。");
+        // 取要套快捷鍵的圖層:優先用目前合成選取的圖層(可複選),沒選才退回已鎖定的角色層。
+        function performTargets() {
+            var a = app.project.activeItem;
+            if (a instanceof CompItem && a.selectedLayers.length) return a.selectedLayers;
+            if (lockedLayerAlive()) return [lockedTarget.layerChain[0]];
+            alert("先在目前合成選取要套用的圖層(可複選),\n或在上面「鎖定選取角色圖層」。");
             return null;
         }
 
         bShock.onClick = function () {
-            var layer = needLockedLayer(); if (!layer) return;
+            var targets = performTargets(); if (!targets) return;
             app.beginUndoGroup("演出:嚇一跳");
             try {
-                var scale = layer.property("ADBE Transform Group").property("ADBE Scale");
-                var outer = layer.containingComp;
-                var t = outer.time;
-                var base = scale.valueAtTime(t, false);
-                var big = [base[0] * 1.2, base[1] * 1.2];
-                scale.setValueAtTime(t, base);
-                scale.setValueAtTime(t + 0.08, big);
-                scale.setValueAtTime(t + 0.20, base);
+                for (var n = 0; n < targets.length; n++) {
+                    var scale = targets[n].property("ADBE Transform Group").property("ADBE Scale");
+                    var t = targets[n].containingComp.time;
+                    var base = scale.valueAtTime(t, false);
+                    var big = [base[0] * 1.2, base[1] * 1.2];
+                    scale.setValueAtTime(t, base);
+                    scale.setValueAtTime(t + 0.08, big);
+                    scale.setValueAtTime(t + 0.20, base);
+                }
             } finally { app.endUndoGroup(); }
-            showStatus("已加入「嚇一跳」縮放動畫(目前時間附近)。");
+            showStatus("已對 " + targets.length + " 個圖層加入「嚇一跳」縮放動畫(目前時間附近)。");
         };
 
         bFlip.onClick = function () {
-            var layer = needLockedLayer(); if (!layer) return;
+            var targets = performTargets(); if (!targets) return;
             app.beginUndoGroup("演出:左右翻轉");
             try {
-                var scale = layer.property("ADBE Transform Group").property("ADBE Scale");
-                var outer = layer.containingComp;
-                var t = outer.time;
-                var base = scale.valueAtTime(t, false);
-                var flipped = [-base[0], base[1]];
-                if (base.length > 2) flipped.push(base[2]);
-                scale.setValueAtTime(t, flipped);
-                var k = scale.nearestKeyIndex(t);
-                scale.setInterpolationTypeAtKey(k, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+                for (var n = 0; n < targets.length; n++) {
+                    var scale = targets[n].property("ADBE Transform Group").property("ADBE Scale");
+                    var t = targets[n].containingComp.time;
+                    var base = scale.valueAtTime(t, false);
+                    var flipped = [-base[0], base[1]];
+                    if (base.length > 2) flipped.push(base[2]);
+                    scale.setValueAtTime(t, flipped);
+                    var k = scale.nearestKeyIndex(t);
+                    scale.setInterpolationTypeAtKey(k, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+                }
             } finally { app.endUndoGroup(); }
-            showStatus("已在目前時間下「左右翻轉」HOLD key(Scale X 正負互換)。");
+            showStatus("已對 " + targets.length + " 個圖層下「左右翻轉」HOLD key(Scale X 正負互換)。");
         };
 
         bFlash.onClick = function () {
-            var layer = needLockedLayer(); if (!layer) return;
+            var targets = performTargets(); if (!targets) return;
             app.beginUndoGroup("演出:閃爍");
             try {
-                var op = layer.property("ADBE Transform Group").property("ADBE Opacity");
-                var outer = layer.containingComp;
-                var t = outer.time;
-                var base = op.valueAtTime(t, false);
-                var seq = [base, 20, base, 20, base];
-                for (var i = 0; i < seq.length; i++) {
-                    var kt = t + i * 0.06;
-                    op.setValueAtTime(kt, seq[i]);
-                    var k = op.nearestKeyIndex(kt);
-                    op.setInterpolationTypeAtKey(k, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+                for (var n = 0; n < targets.length; n++) {
+                    var op = targets[n].property("ADBE Transform Group").property("ADBE Opacity");
+                    var t = targets[n].containingComp.time;
+                    var base = op.valueAtTime(t, false);
+                    var seq = [base, 20, base, 20, base];
+                    for (var i = 0; i < seq.length; i++) {
+                        var kt = t + i * 0.06;
+                        op.setValueAtTime(kt, seq[i]);
+                        var k = op.nearestKeyIndex(kt);
+                        op.setInterpolationTypeAtKey(k, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+                    }
                 }
             } finally { app.endUndoGroup(); }
-            showStatus("已加入「閃爍」不透明度 HOLD key 序列(目前時間附近)。");
+            showStatus("已對 " + targets.length + " 個圖層加入「閃爍」不透明度 HOLD key 序列(目前時間附近)。");
         };
 
         // --- 表達式工具 ---
-        var p4 = makeTab("表達式");
+        var p4 = TAB.expr;
 
         var rowProp = p4.add("group");
         rowProp.add("statictext", undefined, "套在:");
