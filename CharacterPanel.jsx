@@ -17,6 +17,16 @@
 
     // ================= 共用 =================
 
+    // 面板底部的狀態列(buildUI 會把它指過來)。
+    // 重複性高的操作(呼吸/漂浮…)用這個顯示結果,不跳 alert 打斷操作。
+    var statusLabel = null;
+    function showStatus(msg) {
+        if (statusLabel) {
+            try { statusLabel.text = msg; return; } catch (e) {}
+        }
+        alert(msg);
+    }
+
     function activeComp() {
         var c = app.project.activeItem;
         if (!(c instanceof CompItem)) { alert("請先點一下要操作的合成時間軸。"); return null; }
@@ -465,11 +475,12 @@
                     "var amp = 1.5, period = 3; // 幅度(%) / 週期(秒)",
                     "seedRandom(index, true);",
                     "var ph = random(0, period); // 每個圖層相位錯開",
-                    "[value[0], value[1] + amp * Math.sin((time + ph) * 2 * Math.PI / period), value[2]]"
+                    "var y = value[1] + amp * Math.sin((time + ph) * 2 * Math.PI / period);",
+                    "value.length > 2 ? [value[0], y, value[2]] : [value[0], y] // 相容 2D/3D 圖層"
                 ].join("\n");
             }
         } finally { app.endUndoGroup(); }
-        alert("已套呼吸到 " + sel.length + " 個圖層(Scale 上下 1.5%)。\n提醒:錨點在底部效果最好。");
+        showStatus("已套呼吸到 " + sel.length + " 個圖層(Scale 上下 1.5%,錨點在底部效果最好)。");
     }
 
     function doFloat() {
@@ -488,7 +499,7 @@
                 ].join("\n");
             }
         } finally { app.endUndoGroup(); }
-        alert("已套漂浮到 " + sel.length + " 個圖層。");
+        showStatus("已套漂浮到 " + sel.length + " 個圖層。");
     }
 
     // ================= 3. 演出:說話 key =================
@@ -587,21 +598,21 @@
         { zh:"屁股",  en:"hip",       cat:"身體" },
 
         { zh:"手臂左", en:"arm_L",     cat:"手臂" },
-        { zh:"手臂右", en:"arm_R",     cat:"手臂" },
         { zh:"上臂左", en:"arm_up_L",  cat:"手臂" },
-        { zh:"上臂右", en:"arm_up_R",  cat:"手臂" },
         { zh:"下臂左", en:"arm_low_L", cat:"手臂" },
-        { zh:"下臂右", en:"arm_low_R", cat:"手臂" },
         { zh:"手左",  en:"hand_L",    cat:"手臂" },
+        { zh:"手臂右", en:"arm_R",     cat:"手臂" },
+        { zh:"上臂右", en:"arm_up_R",  cat:"手臂" },
+        { zh:"下臂右", en:"arm_low_R", cat:"手臂" },
         { zh:"手右",  en:"hand_R",    cat:"手臂" },
 
         { zh:"腿左",  en:"leg_L",     cat:"腿腳" },
-        { zh:"腿右",  en:"leg_R",     cat:"腿腳" },
         { zh:"大腿左", en:"leg_up_L",  cat:"腿腳" },
-        { zh:"大腿右", en:"leg_up_R",  cat:"腿腳" },
         { zh:"小腿左", en:"leg_low_L", cat:"腿腳" },
-        { zh:"小腿右", en:"leg_low_R", cat:"腿腳" },
         { zh:"腳左",  en:"foot_L",    cat:"腿腳" },
+        { zh:"腿右",  en:"leg_R",     cat:"腿腳" },
+        { zh:"大腿右", en:"leg_up_R",  cat:"腿腳" },
+        { zh:"小腿右", en:"leg_low_R", cat:"腿腳" },
         { zh:"腳右",  en:"foot_R",    cat:"腿腳" },
 
         { zh:"頭髮",  en:"hair",      cat:"配件" },
@@ -610,6 +621,26 @@
         { zh:"尾巴",  en:"tail",      cat:"配件" },
         { zh:"陰影",  en:"shadow",    cat:"配件" },
         { zh:"光",    en:"light",     cat:"配件" }
+    ];
+
+    // 反向語序別名（左手/右手/左腿/右腿…）：只用於中英轉換比對，不出現在命名按鈕上
+    var NAME_ALIASES = [
+        { zh:"左手臂", en:"arm_L" },
+        { zh:"右手臂", en:"arm_R" },
+        { zh:"左上臂", en:"arm_up_L" },
+        { zh:"右上臂", en:"arm_up_R" },
+        { zh:"左下臂", en:"arm_low_L" },
+        { zh:"右下臂", en:"arm_low_R" },
+        { zh:"左手",  en:"hand_L" },
+        { zh:"右手",  en:"hand_R" },
+        { zh:"左腿",  en:"leg_L" },
+        { zh:"右腿",  en:"leg_R" },
+        { zh:"左大腿", en:"leg_up_L" },
+        { zh:"右大腿", en:"leg_up_R" },
+        { zh:"左小腿", en:"leg_low_L" },
+        { zh:"右小腿", en:"leg_low_R" },
+        { zh:"左腳",  en:"foot_L" },
+        { zh:"右腳",  en:"foot_R" }
     ];
 
     // 使用者自訂對照（存 AE 偏好設定）
@@ -641,8 +672,15 @@
     }
 
     function fullMap() {
-        // 內建 + 使用者自訂合併，自訂優先（放後面，比對時先掃自訂）
+        // 內建 + 使用者自訂合併，自訂優先（放後面，比對時先掃自訂）→ 給命名按鈕用
         return NAME_MAP.concat(nameMapLoad());
+    }
+
+    // 給中英轉換用：額外加入反向語序別名(左手/右手…)。
+    // 別名放最前面、NAME_MAP 居中、使用者自訂放最後 → 比對時優先順序：自訂 > NAME_MAP > 別名,
+    // 同一個 en 對到多個 zh 時，轉中文會優先採用 NAME_MAP/自訂裡的寫法。
+    function convMap() {
+        return NAME_ALIASES.concat(NAME_MAP).concat(nameMapLoad());
     }
 
     // ── 命名輔助：數同名家族、判斷純數字 ─────────────────────
@@ -693,7 +731,7 @@
     // direction: "toEn" or "toZh"
     function doConvertAll(direction) {
         var comp = activeComp(); if (!comp) return;
-        var map = fullMap();
+        var map = convMap();
         var count = 0;
         app.beginUndoGroup("命名轉換 " + (direction === "toEn" ? "→英文" : "→中文"));
         try {
@@ -726,7 +764,7 @@
         var comp = activeComp(); if (!comp) return;
         var sel = comp.selectedLayers;
         if (sel.length === 0) { alert("先選取要轉換的圖層。"); return; }
-        var map = fullMap();
+        var map = convMap();
         var count = 0;
         app.beginUndoGroup("選取圖層命名轉換");
         try {
@@ -1298,6 +1336,10 @@
         }
         tabs.onChange = updateScrollbars;
         pal.__updateScroll = updateScrollbars;
+
+        // 狀態列:顯示重複性操作(呼吸/漂浮…)的結果,不跳 alert
+        statusLabel = pal.add("statictext", undefined, "就緒", { truncate: "end" });
+        statusLabel.alignment = ["fill", "bottom"];
 
         // --- 標記 ---
         var p1 = makeTab("標記");
