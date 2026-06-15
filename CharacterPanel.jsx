@@ -268,17 +268,50 @@
 
     // ================= 1. 標記 =================
 
-    // 每個標記:基準名 / 滑桿 / 依序的滑桿值(第1個閉嘴=0、第2個=3…照你的慣例)
+    // 每個標記:基準名 / 滑桿 / 慣例起始值(base)。
+    // 同一個滑桿的值是一條連號序列:base 還沒被占用就用 base,已占用就接在目前最大值 +1。
+    //   嘴:0=閉嘴、1=張嘴,之後的嘴型一律 2、3、4…累加
+    //   眼:0=睜眼、1=閉眼,之後累加(眼睛同理)
+    //   眉/特效:從 base 開始一路累加
     var TAGS = {
-        "閉眼": { slider: "eye",   vals: [1] },
-        "睜眼": { slider: "eye",   vals: [0] },
-        "閉嘴": { slider: "mouth", vals: [0, 3] },
-        "張嘴": { slider: "mouth", vals: [1, 2] },
-        "眉":   { slider: "眉",    vals: [0, 1, 2, 3] },
-        "特效": { slider: "emo",   vals: [1, 2, 3, 4, 5] }, // 廣義表情特效:汗滴、怒氣、驚訝符號、愛心…都可掛在 emo 滑桿上
+        "閉眼": { slider: "eye",   base: 1 },
+        "睜眼": { slider: "eye",   base: 0 },
+        "閉嘴": { slider: "mouth", base: 0 },
+        "張嘴": { slider: "mouth", base: 1 },
+        "眉":   { slider: "眉",    base: 0 },
+        "特效": { slider: "emo",   base: 1 }, // 廣義表情特效:汗滴、怒氣、驚訝符號、愛心…都可掛在 emo 滑桿上
         "耳":   { slider: null },
         "鼻":   { slider: null }
     };
+
+    // 掃 comp,回傳某滑桿目前被哪些值占用(用於連號分配)。
+    function usedSliderValues(comp, sliderName) {
+        var used = {};
+        for (var i = 1; i <= comp.numLayers; i++) {
+            try {
+                var op = opacityProp(comp.layer(i));
+                if (!op.expressionEnabled) continue;
+                var ex = op.expression;
+                if (ex.indexOf('effect("' + sliderName + '")') === -1) continue;
+                var m = ex.match(new RegExp("==\\s*(\\d+)"));
+                if (m) used[parseInt(m[1], 10)] = true;
+            } catch (e) {}
+        }
+        return used;
+    }
+
+    // 給某滑桿分配下一個值:base 沒被占用就用 base,否則接在目前最大值 +1。
+    function allocSliderValue(comp, sliderName, base) {
+        var used = usedSliderValues(comp, sliderName);
+        if (!used[base]) return base;
+        var mx = -1;
+        for (var k in used) {
+            if (!used.hasOwnProperty(k)) continue;
+            var n = parseInt(k, 10);
+            if (n > mx) mx = n;
+        }
+        return mx + 1;
+    }
 
     function ensureRigNulls(comp) {
         function ensureNull(name) {
@@ -312,9 +345,10 @@
                 lay.name = (idx === 0) ? base : base + " " + (idx + 1);
 
                 if (tag.slider) {
-                    // 「特效」每個圖層用獨立值,不設上限(idx+1、idx+2...一路累加),避免共用同一個值互相打架
-                    var v = (idx < tag.vals.length) ? tag.vals[idx] : (tag.vals[tag.vals.length - 1] + (idx - tag.vals.length + 1));
-                    opacityProp(lay).expression = switchExpr(sliderNameFor(comp, tag.slider), v);
+                    // 同一滑桿值連號分配:第一個用慣例 base,之後一律接著最大值 +1,不會共用同值打架
+                    var sliderName = sliderNameFor(comp, tag.slider);
+                    var v = allocSliderValue(comp, sliderName, tag.base);
+                    opacityProp(lay).expression = switchExpr(sliderName, v);
                 }
                 if (nulls && !lay.parent) {
                     if (base === "耳") lay.parent = nulls.ear;
@@ -329,19 +363,13 @@
     // ---- 特殊表情(暈眼、X眼、哭嚎嘴…):掛到滑桿的下一個空值 ----
 
     function nextSliderValue(comp, sliderName) {
-        // 標準慣例已占用的最大值
-        var reserved = { eye: 1, mouth: 3, "眉": 3, emo: 5 };
-        var maxV = (reserved[sliderName] !== undefined) ? reserved[sliderName] : 0;
-        for (var i = 1; i <= comp.numLayers; i++) {
-            try {
-                var op = opacityProp(comp.layer(i));
-                if (!op.expressionEnabled) continue;
-                var ex = op.expression;
-                if (ex.indexOf('effect("' + sliderName + '")') === -1) continue;
-                // 注意:ExtendScript 不能寫 /==.../ 開頭的正則字面量,會被誤認成 /= 運算子
-                var m = ex.match(new RegExp("==\\s*(\\d+)"));
-                if (m && parseInt(m[1], 10) > maxV) maxV = parseInt(m[1], 10);
-            } catch (e) {}
+        // 特殊表情接在該滑桿目前最大值之後(純粹看實際用掉的值,連號往上)
+        var used = usedSliderValues(comp, sliderName);
+        var maxV = -1;
+        for (var k in used) {
+            if (!used.hasOwnProperty(k)) continue;
+            var n = parseInt(k, 10);
+            if (n > maxV) maxV = n;
         }
         return maxV + 1;
     }
