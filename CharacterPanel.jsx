@@ -275,7 +275,7 @@
         "閉嘴": { slider: "mouth", vals: [0, 3] },
         "張嘴": { slider: "mouth", vals: [1, 2] },
         "眉":   { slider: "眉",    vals: [0, 1, 2, 3] },
-        "汗":   { slider: "emo",   vals: [1, 2, 3] },
+        "特效": { slider: "emo",   vals: [1, 2, 3, 4, 5] }, // 廣義表情特效:汗滴、怒氣、驚訝符號、愛心…都可掛在 emo 滑桿上
         "耳":   { slider: null },
         "鼻":   { slider: null }
     };
@@ -329,7 +329,7 @@
 
     function nextSliderValue(comp, sliderName) {
         // 標準慣例已占用的最大值
-        var reserved = { eye: 1, mouth: 3, "眉": 3, emo: 3 };
+        var reserved = { eye: 1, mouth: 3, "眉": 3, emo: 5 };
         var maxV = (reserved[sliderName] !== undefined) ? reserved[sliderName] : 0;
         for (var i = 1; i <= comp.numLayers; i++) {
             try {
@@ -1524,7 +1524,7 @@
         var p1 = makeTab("標記");
         p1.add("statictext", undefined, "先選圖層再按按鈕:  [v2.0]");
         var rowA = p1.add("group"); var rowB = p1.add("group");
-        var tagOrder = ["閉眼", "睜眼", "閉嘴", "張嘴", "眉", "汗", "耳", "鼻"];
+        var tagOrder = ["閉眼", "睜眼", "閉嘴", "張嘴", "眉", "特效", "耳", "鼻"];
         var fullRigCheck;
         for (var i = 0; i < tagOrder.length; i++) {
             var row = (i < 4) ? rowA : rowB;
@@ -1942,12 +1942,11 @@
                 : "「" + sliderName + "」滑桿的值對應(填到上面「值」欄):\n" + lines.join("\n"));
         };
 
-        // ── 演出快捷鍵(嚇一跳/翻轉/閃爍 需先「鎖定選取角色圖層」)──
-        p3.add("statictext", undefined, "演出快捷鍵(嚇一跳/翻轉/閃爍 要先鎖定角色圖層;噴汗適用所有模式):");
+        // ── 演出快捷鍵(需先「鎖定選取角色圖層」)──────────────
+        p3.add("statictext", undefined, "演出快捷鍵(嚇一跳/翻轉/閃爍,要先鎖定角色圖層):");
         var rowShort = p3.add("group");
         var bShock = rowShort.add("button", undefined, "嚇一跳"); bShock.preferredSize.width = 70;
         var bFlip  = rowShort.add("button", undefined, "左右翻轉"); bFlip.preferredSize.width = 70;
-        var bSweat = rowShort.add("button", undefined, "噴汗"); bSweat.preferredSize.width = 70;
         var bFlash = rowShort.add("button", undefined, "閃爍"); bFlash.preferredSize.width = 70;
 
         function needLockedLayer() {
@@ -1988,8 +1987,6 @@
             } finally { app.endUndoGroup(); }
             showStatus("已在目前時間下「左右翻轉」HOLD key(Scale X 正負互換)。");
         };
-
-        bSweat.onClick = function () { remoteKey("emo", 1); showStatus("已下「噴汗」key(emo 滑桿 = 1)。"); };
 
         bFlash.onClick = function () {
             var layer = needLockedLayer(); if (!layer) return;
