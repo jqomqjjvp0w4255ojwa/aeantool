@@ -191,18 +191,51 @@
         return out;
     }
 
-    // 說話開合擠壓表達式:掛在「嘴軸」Null 的 Scale 上,mouth 滑桿 == activeVal 時上下開合
-    function squashMouthExpr(mouthName, activeVal) {
+    // 說話開合擠壓表達式:掛在共用「嘴軸」Null 的 Scale 上。
+    // mouth 滑桿等於「任何一個說話值」時就開合(同時只有一張嘴可見,故可共用一個嘴軸)。
+    function squashMouthExpr(mouthName, activeVals) {
         return [
-            "// === 說話擠壓(" + mouthName + " 滑桿 == " + activeVal + " 時啟動) ===",
+            "// === 說話開合擠壓(共用嘴軸;mouth 滑桿在說話值時開合) ===",
+            "var talk = [" + activeVals.join(", ") + "]; // 各說話嘴的值",
             's = thisComp.layer("control").effect("' + mouthName + '")("Slider");',
             "var speed = 9, amp = 45; // 開合速度 / 幅度(%)",
-            "if (s == " + activeVal + ") {",
+            "var on = false;",
+            "for (var i = 0; i < talk.length; i++) { if (s == talk[i]) on = true; }",
+            "if (on) {",
             "  var k = 1 - (amp / 100) * Math.abs(Math.sin(time * speed));",
             "  // 相容 2D Null(嘴軸)與 3D 圖層",
             "  value.length > 2 ? [value[0], value[1] * k, value[2]] : [value[0], value[1] * k];",
             "} else { value; }"
         ].join("\n");
+    }
+
+    // 把所有「說話嘴」掛到同一個共用「嘴軸」,並重設開合表達式。回傳 [{name,val}...]。
+    function applyTalkSquash(comp, mouthName) {
+        var talkMouths = collectByBase(comp, "說話嘴");
+        if (talkMouths.length === 0) return [];
+
+        // 建/沿用單一共用嘴軸(放在第一張說話嘴的位置)
+        var axis = findLayer(comp, "嘴軸");
+        if (!axis) axis = makeAxisNull(comp, talkMouths[0], "嘴軸");
+
+        var vals = [], infos = [];
+        for (var i = 0; i < talkMouths.length; i++) {
+            var m = talkMouths[i];
+            if (m === axis) continue;
+            var mv = layerSliderVal(m);
+            if (mv === null) { mv = nextSliderValue(comp, mouthName); opacityProp(m).expression = switchExpr(mouthName, mv); }
+            // 全部掛到共用嘴軸(指定 parent 時 AE 會保持外觀不跳動)
+            if (m.parent !== axis) m.parent = axis;
+            // 轉軸時美術反向補償,維持原本角度(跟 makeAxisNull 一致)
+            try {
+                m.property("ADBE Transform Group").property("ADBE Rotate Z").expression =
+                    "value - parent.transform.rotation // 軸轉、美術不轉";
+            } catch (eR) {}
+            vals.push(mv);
+            infos.push({ name: m.name, val: mv });
+        }
+        scaleProp(axis).expression = squashMouthExpr(mouthName, vals);
+        return infos;
     }
 
     function blinkWindowLines(seed, minGap, maxGap, frames) {
@@ -379,7 +412,7 @@
             // 「說話嘴」:不改原嘴型,而是把選取的嘴複製成壓縮開合動態,值接在最大值之後
             if (tag.talkCopy) {
                 var mouthName = sliderNameFor(comp, "mouth");
-                var made = [];
+                var made = 0;
                 for (var t = 0; t < sel.length; t++) {
                     var src = sel[t];
                     var dup = src.duplicate();
@@ -388,15 +421,15 @@
                     var tv = nextSliderValue(comp, mouthName); // 接在目前最大值之後
                     opacityProp(dup).expression = switchExpr(mouthName, tv);
                     try { dup.moveBefore(src); } catch (eMv) {}
-                    // 套開合擠壓(掛在各自的嘴軸上,斜嘴也不歪)。
-                    // 軸名用值區分,跟「說話設定」一致,多次按也不會產生同名嘴軸。
-                    var axisName = (tv === talkValue(comp)) ? "嘴軸" : "嘴軸 " + tv;
-                    var axis = makeAxisNull(comp, dup, axisName);
-                    scaleProp(axis).expression = squashMouthExpr(mouthName, tv);
-                    made.push("「" + dup.name + "」= " + tv);
+                    made++;
                 }
-                alert("已新增 " + made.length + " 張說話嘴(壓縮開合動態),原嘴型不變:\n  " +
-                      made.join("\n  ") + "\n\n演出時把 " + mouthName +
+                // 所有說話嘴共用同一個「嘴軸」並重設開合表達式(不會冒出一堆嘴軸)
+                var infoArr = applyTalkSquash(comp, mouthName);
+                var lines = [];
+                for (var n = 0; n < infoArr.length; n++) lines.push("「" + infoArr[n].name + "」= " + infoArr[n].val);
+                alert("已新增 " + made + " 張說話嘴(壓縮開合動態),原嘴型不變。\n" +
+                      "目前所有說話嘴(共用一個「嘴軸」):\n  " + lines.join("\n  ") +
+                      "\n\n演出時把 " + mouthName +
                       " 滑桿切到對應值就會說話開合;切到原本的嘴型值則是靜態嘴。");
                 return;
             }
@@ -617,23 +650,16 @@
                 generated = generated || "open_only";
             }
 
-            // 對每一張說話嘴各套擠壓:用它自己綁的滑桿值、各自的嘴軸,互不干擾
+            // 所有說話嘴共用一個「嘴軸」,擠壓表達式對任何說話值都生效
+            var infoArr = applyTalkSquash(comp, mouthName);
             var infos = [];
-            for (var i = 0; i < talkMouths.length; i++) {
-                var m = talkMouths[i];
-                var mv = layerSliderVal(m);
-                if (mv === null) { mv = talkValue(comp); opacityProp(m).expression = switchExpr(mouthName, mv); }
-                var axisName = (mv === talkValue(comp)) ? "嘴軸" : "嘴軸 " + mv; // 每組各自的軸,可分別轉角度
-                var axis = makeAxisNull(comp, m, axisName);
-                scaleProp(axis).expression = squashMouthExpr(mouthName, mv);
-                infos.push("「" + m.name + "」= " + mv);
-            }
+            for (var i = 0; i < infoArr.length; i++) infos.push("「" + infoArr[i].name + "」= " + infoArr[i].val);
 
-            var msg = "說話設定完成,已對 " + talkMouths.length + " 張說話嘴套上開合擠壓:\n  " +
+            var msg = "說話設定完成,已對 " + infos.length + " 張說話嘴套上開合擠壓(共用同一個「嘴軸」):\n  " +
                       infos.join("\n  ") + "\n" +
                       "用下面的「開始/停止說話」按鈕打 key,或在 control 的 " + mouthName +
                       " 滑桿自己切換要用哪張嘴。\n\n" +
-                      "嘴如果是斜的:把對應的「嘴軸」Rotation 轉到跟嘴同角度,\n" +
+                      "嘴如果是斜的:把「嘴軸」Rotation 轉到跟嘴同角度,\n" +
                       "美術不會跟著轉,開合就會沿嘴的方向、不會歪。\n\n" +
                       "想要嘴張開但不動(如唱歌長音),把滑桿 key 到原本的靜態嘴型值即可。";
             if (generated === true) {
