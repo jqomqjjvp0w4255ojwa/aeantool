@@ -317,18 +317,18 @@
         return shape;
     }
 
-    // 只有張嘴/說話嘴圖的角色:在嘴軸中心生一條閉嘴線(#7E594C 圓角端點),
-    // 長度參考嘴圖寬,讓你自己調 Bezier 弧度。
-    function createClosedMouth(comp, openLay) {
+    // 在 refLay 位置生一條圓角端點短線段(#7E594C,6px),長度參考 refLay 寬 * widthRatio。
+    // 給「閉嘴」「眉毛佔位」等需要簡單線段起點的場合共用,之後自己拉 Bezier 弧度/改形狀。
+    function createPlaceholderLine(comp, refLay, shapeName, groupName, widthRatio) {
         var lineW = 60;
-        try { lineW = Math.max(openLay.width * 0.75, 30); } catch (e) {}
+        try { lineW = Math.max(refLay.width * widthRatio, 30); } catch (e) {}
         var half = lineW / 2;
 
         var shape = comp.layers.addShape();
-        shape.name = "嘴";
+        shape.name = shapeName;
         var vectors = shape.property("ADBE Root Vectors Group");
         var grp = vectors.addProperty("ADBE Vector Group");
-        grp.name = "closed_mouth";
+        grp.name = groupName;
         var pathGrp = grp.property("ADBE Vectors Group");
 
         // 路徑:水平直線,兩端之後可自行拉成曲線
@@ -346,11 +346,16 @@
         stroke.property("ADBE Vector Stroke Width").setValue(6);
         stroke.property("ADBE Vector Stroke Line Cap").setValue(2); // Round Cap
 
-        var pos = openLay.property("ADBE Transform Group").property("ADBE Position").value;
+        var pos = refLay.property("ADBE Transform Group").property("ADBE Position").value;
         shape.property("ADBE Transform Group").property("ADBE Position").setValue(pos);
-        if (openLay.parent) shape.parent = openLay.parent;
-        shape.moveBefore(openLay);
+        if (refLay.parent) shape.parent = refLay.parent;
+        shape.moveBefore(refLay);
         return shape;
+    }
+
+    // 只有張嘴/說話嘴圖的角色:在嘴軸中心生一條閉嘴線,長度參考嘴圖寬,讓你自己調 Bezier 弧度。
+    function createClosedMouth(comp, openLay) {
+        return createPlaceholderLine(comp, openLay, "嘴", "closed_mouth", 0.75);
     }
 
     // ================= 1. 標記 =================
@@ -441,14 +446,31 @@
                     try { dup.moveBefore(src); } catch (eMv) {}
                     made++;
                 }
+                // 沒有「嘴」(閉嘴)→ 自動生一條閉嘴線,避免說話嘴沒有對應的閉嘴狀態
+                var closedLay = findLayer(comp, "嘴");
+                var generatedClosed = false;
+                if (!closedLay) {
+                    var anyTalk = collectByBase(comp, "說話嘴")[0];
+                    closedLay = createClosedMouth(comp, anyTalk);
+                    closedLay.name = "嘴";
+                    var closedVal = allocSliderValue(comp, mouthName, 0);
+                    opacityProp(closedLay).expression = switchExpr(mouthName, closedVal);
+                    generatedClosed = true;
+                }
+
                 // 所有說話嘴共用同一個「嘴軸」並重設開合表達式(不會冒出一堆嘴軸)
                 var infoArr = applyTalkSquash(comp, mouthName);
                 var lines = [];
                 for (var n = 0; n < infoArr.length; n++) lines.push("「" + infoArr[n].name + "」= " + infoArr[n].val);
-                alert("已新增 " + made + " 張說話嘴(壓縮開合動態),原嘴型不變。\n" +
+                var msgTalk = "已新增 " + made + " 張說話嘴(壓縮開合動態),原嘴型不變。\n" +
                       "目前所有說話嘴(共用一個「嘴軸」):\n  " + lines.join("\n  ") +
                       "\n\n演出時把 " + mouthName +
-                      " 滑桿切到對應值就會說話開合;切到原本的嘴型值則是靜態嘴。");
+                      " 滑桿切到對應值就會說話開合;切到原本的嘴型值則是靜態嘴。";
+                if (generatedClosed) {
+                    msgTalk += "\n\n此角色原本沒有閉嘴,已自動生成一條「嘴」線段(#7E594C 圓角,值 = " + closedVal + ")。\n" +
+                               "位置在嘴軸中心,可用鋼筆工具拉 Bezier 弧度、調 Stroke 配合畫風。";
+                }
+                alert(msgTalk);
                 return;
             }
 
@@ -471,6 +493,35 @@
                     else if (tag.slider === "eye" || tag.slider === "眉") lay.parent = nulls.eye;
                     else if (tag.slider === "mouth") lay.parent = nulls.mouth;
                 }
+            }
+
+            // 第一次標記「眉」(value 0)、目前 comp 裡只有這一個眉 → 自動生 2 條佔位短線段(眉2、眉3),
+            // 當挑眉/怒眉等其他表情的起點,已綁好滑桿值,改完形狀/位置即可,不用手動改表達式。
+            // 之後要再加表情:複製其中一張眉,選取後再按一次「眉」按鈕,面板會自動接續編號與滑桿值。
+            if (base === "眉" && countByBase(comp, "眉") === 1) {
+                var browLay = findLayer(comp, "眉");
+                var browSliderName = sliderNameFor(comp, "眉");
+                for (var bIdx = 2; bIdx <= 3; bIdx++) {
+                    var ph = createPlaceholderLine(comp, browLay, "眉 " + bIdx, "brow_placeholder", 0.6);
+                    var phVal = allocSliderValue(comp, browSliderName, tag.base);
+                    opacityProp(ph).expression = switchExpr(browSliderName, phVal);
+                }
+                alert("已在「眉」位置生成 2 條佔位短線段(眉 2、眉 3),已綁好 " + browSliderName + " 滑桿值。\n" +
+                      "拿來當挑眉/怒眉等其他表情的起點,改形狀/位置貼合畫風即可。\n\n" +
+                      "之後要再加表情:複製其中一張眉,選取後再按一次「眉」按鈕,\n" +
+                      "面板會自動接續編號(眉 4…)與滑桿值,不用手動改表達式。");
+            }
+
+            // 第一次標記「嘴」(閉嘴 value 0)、還沒有「說話嘴」→ 自動生一張說話嘴並套上開合動態
+            if (base === "嘴" && collectByBase(comp, "說話嘴").length === 0) {
+                var baseMouth = findLayer(comp, "嘴");
+                var mouthNameG = sliderNameFor(comp, "mouth");
+                var openLay = createOpenMouth(comp, baseMouth);
+                opacityProp(openLay).expression = switchExpr(mouthNameG, nextSliderValue(comp, mouthNameG));
+                openLay.name = "說話嘴";
+                applyTalkSquash(comp, mouthNameG);
+                alert("目前沒有「說話嘴」,已自動生成一張深色橢圓當說話嘴並套上開合動態。\n" +
+                      "請花十秒調整「說話嘴」圖層的大小/顏色,讓它貼合畫風。");
             }
         } finally { app.endUndoGroup(); }
     }
