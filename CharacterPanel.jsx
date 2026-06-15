@@ -312,7 +312,8 @@
                 lay.name = (idx === 0) ? base : base + " " + (idx + 1);
 
                 if (tag.slider) {
-                    var v = tag.vals[Math.min(idx, tag.vals.length - 1)];
+                    // 「特效」每個圖層用獨立值,不設上限(idx+1、idx+2...一路累加),避免共用同一個值互相打架
+                    var v = (idx < tag.vals.length) ? tag.vals[idx] : (tag.vals[tag.vals.length - 1] + (idx - tag.vals.length + 1));
                     opacityProp(lay).expression = switchExpr(sliderNameFor(comp, tag.slider), v);
                 }
                 if (nulls && !lay.parent) {
