@@ -191,6 +191,20 @@
         return out;
     }
 
+    // 說話開合擠壓表達式:掛在「嘴軸」Null 的 Scale 上,mouth 滑桿 == activeVal 時上下開合
+    function squashMouthExpr(mouthName, activeVal) {
+        return [
+            "// === 說話擠壓(" + mouthName + " 滑桿 == " + activeVal + " 時啟動) ===",
+            's = thisComp.layer("control").effect("' + mouthName + '")("Slider");',
+            "var speed = 9, amp = 45; // 開合速度 / 幅度(%)",
+            "if (s == " + activeVal + ") {",
+            "  var k = 1 - (amp / 100) * Math.abs(Math.sin(time * speed));",
+            "  // 相容 2D Null(嘴軸)與 3D 圖層",
+            "  value.length > 2 ? [value[0], value[1] * k, value[2]] : [value[0], value[1] * k];",
+            "} else { value; }"
+        ].join("\n");
+    }
+
     function blinkWindowLines(seed, minGap, maxGap, frames) {
         return [
             "var minGap = " + minGap + ", maxGap = " + maxGap + ";",
@@ -207,8 +221,10 @@
 
     function uniqueSeed() { return Math.floor(Math.random() * 900000) + 1000; }
 
-    // mouth 滑桿的「說話值」:說話嘴固定在 value 1(壓扁開合用)
+    // mouth 滑桿的「說話值」:取第一張說話嘴實際綁的值,沒有就回 1
     function talkValue(comp) {
+        var t = findLayer(comp, "說話嘴");
+        if (t) { var v = layerSliderVal(t); if (v !== null) return v; }
         return 1;
     }
 
@@ -290,14 +306,15 @@
 
     // 每個標記:基準名 / 滑桿 / 慣例起始值(base)。
     // 同一個滑桿的值是一條連號序列:base 還沒被占用就用 base,已占用就接在目前最大值 +1。
-    //   嘴:0=嘴(閉)、1=說話嘴,說話嘴另複製一張靜態張嘴到 3,其餘嘴型 2、4、5…累加
+    //   嘴:每按一次「嘴」就新增一張嘴型,值連號 0、1、2、3…(0 可以是張嘴也可以是閉嘴,看你先標哪張)
+    //   說話嘴:選一張既有嘴型按下去 → 原嘴型編號不變,另複製一張「壓縮開合動態」嘴接在最大值後面
     //   眼:0=睜眼、1=閉眼,之後累加(眼睛同理)
     //   眉/特效:從 base 開始一路累加
     var TAGS = {
         "閉眼":   { slider: "eye",   base: 1 },
         "睜眼":   { slider: "eye",   base: 0 },
-        "嘴":     { slider: "mouth", base: 0 },                 // 閉著的嘴(value 0)
-        "說話嘴": { slider: "mouth", base: 1, dupStatic: 3 },   // 說話壓扁用嘴型(value 1),同時複製一張靜態張嘴到 value 3
+        "嘴":     { slider: "mouth", base: 0 },          // 嘴型(靜態),值連號 0、1、2…
+        "說話嘴": { slider: "mouth", talkCopy: true },   // 把選取的嘴複製成壓縮開合動態,接在最大值後
         "眉":     { slider: "眉",    base: 0 },
         "特效":   { slider: "emo",   base: 1 }, // 廣義表情特效:汗滴、怒氣、驚訝符號、愛心…都可掛在 emo 滑桿上
         "耳":     { slider: null },
@@ -353,33 +370,48 @@
         var sel = comp.selectedLayers;
         if (sel.length === 0) { alert("先在時間軸選取要標記的圖層,再按「" + base + "」。"); return; }
 
+        var tag = TAGS[base];
+
         app.beginUndoGroup("標記 " + base);
         try {
             ensureControl(comp);
+
+            // 「說話嘴」:不改原嘴型,而是把選取的嘴複製成壓縮開合動態,值接在最大值之後
+            if (tag.talkCopy) {
+                var mouthName = sliderNameFor(comp, "mouth");
+                var made = [];
+                for (var t = 0; t < sel.length; t++) {
+                    var src = sel[t];
+                    var dup = src.duplicate();
+                    var dupIdx = countByBase(comp, "說話嘴");
+                    dup.name = (dupIdx === 0) ? "說話嘴" : "說話嘴 " + (dupIdx + 1);
+                    var tv = nextSliderValue(comp, mouthName); // 接在目前最大值之後
+                    opacityProp(dup).expression = switchExpr(mouthName, tv);
+                    try { dup.moveBefore(src); } catch (eMv) {}
+                    // 套開合擠壓(掛在各自的嘴軸上,斜嘴也不歪)
+                    var axisName = (made.length === 0) ? "嘴軸" : "嘴軸 " + tv;
+                    var axis = makeAxisNull(comp, dup, axisName);
+                    scaleProp(axis).expression = squashMouthExpr(mouthName, tv);
+                    made.push("「" + dup.name + "」= " + tv);
+                }
+                alert("已新增 " + made.length + " 張說話嘴(壓縮開合動態),原嘴型不變:\n  " +
+                      made.join("\n  ") + "\n\n演出時把 " + mouthName +
+                      " 滑桿切到對應值就會說話開合;切到原本的嘴型值則是靜態嘴。");
+                return;
+            }
+
             var nulls = fullRig ? ensureRigNulls(comp) : null;
-            var tag = TAGS[base];
 
             for (var i = 0; i < sel.length; i++) {
                 var lay = sel[i];
-                var idx = countByBase(comp, base); // 已有幾個同名 → 決定編號與滑桿值
+                var idx = countByBase(comp, base); // 已有幾個同名 → 決定編號
                 lay.name = (idx === 0) ? base : base + " " + (idx + 1);
 
                 if (tag.slider) {
-                    // 同一滑桿值連號分配:第一個用慣例 base,之後一律接著最大值 +1,不會共用同值打架
+                    // 同一滑桿值連號分配:base 沒被占用就用 base,否則接著最大值 +1,不會共用同值打架
                     var sliderName = sliderNameFor(comp, tag.slider);
                     var v = allocSliderValue(comp, sliderName, tag.base);
                     opacityProp(lay).expression = switchExpr(sliderName, v);
-
-                    // 「說話嘴」同時複製一張一般的張嘴(不動)當靜止張嘴。
-                    // 靜止嘴的值也用連號分配(慣例從 3 起),多組說話嘴各有各的靜止嘴、不撞值。
-                    if (tag.dupStatic !== undefined) {
-                        var dupIdx = countByBase(comp, "張嘴");
-                        var dup = lay.duplicate();
-                        dup.name = (dupIdx === 0) ? "張嘴" : "張嘴 " + (dupIdx + 1);
-                        var dupV = allocSliderValue(comp, sliderName, tag.dupStatic);
-                        opacityProp(dup).expression = switchExpr(sliderName, dupV);
-                        try { dup.moveAfter(lay); } catch (eDup) {}
-                    }
                 }
                 if (nulls && !lay.parent) {
                     if (base === "耳") lay.parent = nulls.ear;
@@ -564,19 +596,6 @@
             var closed = findLayer(comp, "嘴");
             var generated = false;
 
-            function squashExpr(activeVal) {
-                return [
-                    "// === 說話擠壓(" + mouthName + " 滑桿 == " + activeVal + " 時啟動) ===",
-                    's = thisComp.layer("control").effect("' + mouthName + '")("Slider");',
-                    "var speed = 9, amp = 45; // 開合速度 / 幅度(%)",
-                    "if (s == " + activeVal + ") {",
-                    "  var k = 1 - (amp / 100) * Math.abs(Math.sin(time * speed));",
-                    "  // 相容 2D Null(嘴軸)與 3D 圖層",
-                    "  value.length > 2 ? [value[0], value[1] * k, value[2]] : [value[0], value[1] * k];",
-                    "} else { value; }"
-                ].join("\n");
-            }
-
             // 沒有說話嘴時的自動生成(維持舊有便利:只有閉嘴 → 生一張說話嘴)
             if (talkMouths.length === 0) {
                 if (closed) {
@@ -605,18 +624,17 @@
                 if (mv === null) { mv = talkValue(comp); opacityProp(m).expression = switchExpr(mouthName, mv); }
                 var axisName = (mv === talkValue(comp)) ? "嘴軸" : "嘴軸 " + mv; // 每組各自的軸,可分別轉角度
                 var axis = makeAxisNull(comp, m, axisName);
-                scaleProp(axis).expression = squashExpr(mv);
+                scaleProp(axis).expression = squashMouthExpr(mouthName, mv);
                 infos.push("「" + m.name + "」= " + mv);
             }
 
             var msg = "說話設定完成,已對 " + talkMouths.length + " 張說話嘴套上開合擠壓:\n  " +
-                      infos.join("\n  ") + "\n(= 0 是閉嘴)\n" +
+                      infos.join("\n  ") + "\n" +
                       "用下面的「開始/停止說話」按鈕打 key,或在 control 的 " + mouthName +
                       " 滑桿自己切換要用哪張嘴。\n\n" +
                       "嘴如果是斜的:把對應的「嘴軸」Rotation 轉到跟嘴同角度,\n" +
                       "美術不會跟著轉,開合就會沿嘴的方向、不會歪。\n\n" +
-                      "【靜止張嘴】標記「說話嘴」時會順便複製一張靜態張嘴(不開合),\n" +
-                      "演出時想要嘴張開但不動(如唱歌長音),把滑桿 key 到那張靜態張嘴的值即可。";
+                      "想要嘴張開但不動(如唱歌長音),把滑桿 key 到原本的靜態嘴型值即可。";
             if (generated === true) {
                 msg += "\n\n此角色原本只有「嘴」(閉著),我生了一個深色橢圓 Shape 當「說話嘴」,\n" +
                        "請花十秒調一下它的大小和顏色,讓它貼合畫風。";
@@ -763,23 +781,17 @@
         { zh:"腰帶",  en:"belt",      cat:"身體" },
         { zh:"屁股",  en:"hip",       cat:"身體" },
 
-        { zh:"手臂左", en:"arm_L",     cat:"手臂" },
+        // 手臂只分上下臂(各左右),整隻沒拆的就命名為「上臂」
         { zh:"上臂左", en:"arm_up_L",  cat:"手臂" },
         { zh:"下臂左", en:"arm_low_L", cat:"手臂" },
-        { zh:"手左",  en:"hand_L",    cat:"手臂" },
-        { zh:"手臂右", en:"arm_R",     cat:"手臂" },
         { zh:"上臂右", en:"arm_up_R",  cat:"手臂" },
         { zh:"下臂右", en:"arm_low_R", cat:"手臂" },
-        { zh:"手右",  en:"hand_R",    cat:"手臂" },
 
-        { zh:"腿左",  en:"leg_L",     cat:"腿腳" },
+        // 腿只分大小腿(各左右),整隻沒拆的就命名為「大腿」
         { zh:"大腿左", en:"leg_up_L",  cat:"腿腳" },
         { zh:"小腿左", en:"leg_low_L", cat:"腿腳" },
-        { zh:"腳左",  en:"foot_L",    cat:"腿腳" },
-        { zh:"腿右",  en:"leg_R",     cat:"腿腳" },
         { zh:"大腿右", en:"leg_up_R",  cat:"腿腳" },
         { zh:"小腿右", en:"leg_low_R", cat:"腿腳" },
-        { zh:"腳右",  en:"foot_R",    cat:"腿腳" },
 
         { zh:"頭髮",  en:"hair",      cat:"配件" },
         { zh:"帽子",  en:"hat",       cat:"配件" },
@@ -789,24 +801,25 @@
         { zh:"光",    en:"light",     cat:"配件" }
     ];
 
-    // 反向語序別名（左手/右手/左腿/右腿…）：只用於中英轉換比對，不出現在命名按鈕上
+    // 反向語序別名(左上臂/左大腿…)：只用於中英轉換比對，不出現在命名按鈕上。
+    // 整隻沒拆的手臂/腿一律當「上臂 / 大腿」(對應骨架的 arm_up / leg_up)。
     var NAME_ALIASES = [
-        { zh:"左手臂", en:"arm_L" },
-        { zh:"右手臂", en:"arm_R" },
+        { zh:"左手臂", en:"arm_up_L" },  // 整隻手臂 = 上臂
+        { zh:"右手臂", en:"arm_up_R" },
+        { zh:"手臂左", en:"arm_up_L" },
+        { zh:"手臂右", en:"arm_up_R" },
         { zh:"左上臂", en:"arm_up_L" },
         { zh:"右上臂", en:"arm_up_R" },
         { zh:"左下臂", en:"arm_low_L" },
         { zh:"右下臂", en:"arm_low_R" },
-        { zh:"左手",  en:"hand_L" },
-        { zh:"右手",  en:"hand_R" },
-        { zh:"左腿",  en:"leg_L" },
-        { zh:"右腿",  en:"leg_R" },
+        { zh:"左腿",  en:"leg_up_L" },   // 整隻腿 = 大腿
+        { zh:"右腿",  en:"leg_up_R" },
+        { zh:"腿左",  en:"leg_up_L" },
+        { zh:"腿右",  en:"leg_up_R" },
         { zh:"左大腿", en:"leg_up_L" },
         { zh:"右大腿", en:"leg_up_R" },
         { zh:"左小腿", en:"leg_low_L" },
-        { zh:"右小腿", en:"leg_low_R" },
-        { zh:"左腳",  en:"foot_L" },
-        { zh:"右腳",  en:"foot_R" }
+        { zh:"右小腿", en:"leg_low_R" }
     ];
 
     // 使用者自訂對照（存 AE 偏好設定）
@@ -1309,19 +1322,15 @@
                 { child: "leg_up_L",  parent: BODY_NULL_NAME },
                 { child: "leg_up_R",  parent: BODY_NULL_NAME },
                 { child: "leg_low_L", parent: "leg_up_L" },
-                { child: "leg_low_R", parent: "leg_up_R" },
-                // 後援：手臂/腿沒有分上下段(只有一段)時,直接掛身體/全身NULL
-                // 必須放在分段規則之後 ── 已綁過的會因為已有 parent 而跳過
-                { child: "arm_L", parent: "body" },
-                { child: "arm_R", parent: "body" },
-                { child: "leg_L", parent: BODY_NULL_NAME },
-                { child: "leg_R", parent: BODY_NULL_NAME }
+                { child: "leg_low_R", parent: "leg_up_R" }
+                // 整隻沒拆的手臂/腿一律命名為上臂(arm_up)/大腿(leg_up),
+                // 直接套用上面的 arm_up→body、leg_up→全身NULL 規則,不需另設後援。
             ]
         }
     };
 
-    // 使用者自訂「骨架別名」：把圖層名稱前綴對應到骨架規則的 key(如 arm_L)。
-    // 解決命名跟規則對不上的問題(例如圖層叫「左手臂」而規則找的是 arm_L)。
+    // 使用者自訂「骨架別名」：把圖層名稱前綴對應到骨架規則的 key(如 arm_up_L)。
+    // 解決命名跟規則對不上的問題(例如圖層叫「左手臂」而規則找的是 arm_up_L)。
     var BONE_ALIAS_SEC = "CharacterPanel_BoneAlias";
 
     function boneAliasLoad() {
@@ -1752,9 +1761,9 @@
                   "  小腿(leg_low)→ 大腿\n" +
                   "  上臂(arm_up) → 身體\n" +
                   "  下臂(arm_low)→ 上臂\n" +
-                  "  單段手臂(arm_L/arm_R) → 身體(沒分上下臂時)\n" +
-                  "  單段腿(leg_L/leg_R)   → 全身NULL(沒分大小腿時)\n" +
                   "  頭(head)     → 身體\n\n" +
+                  "整隻沒拆的手臂/腿,命名為「上臂(arm_up)/大腿(leg_up)」即可,\n" +
+                  "會直接套用上面的規則,不必特別處理。\n" +
                   "沒有屁股圖層時,身體會直接掛全身NULL。\n" +
                   "先在命名頁把名稱轉成英文,再按此按鈕效果最佳。\n" +
                   "已有 parent 的圖層不會被覆蓋。\n\n" +
@@ -1774,9 +1783,9 @@
             var key = prompt(
                 "對應到哪個骨架規則 key?\n" +
                 "常用:body / hip / head /\n" +
-                "arm_up_L / arm_up_R / arm_low_L / arm_low_R / arm_L / arm_R /\n" +
-                "leg_up_L / leg_up_R / leg_low_L / leg_low_R / leg_L / leg_R",
-                "arm_L");
+                "arm_up_L / arm_up_R / arm_low_L / arm_low_R /\n" +
+                "leg_up_L / leg_up_R / leg_low_L / leg_low_R",
+                "arm_up_L");
             if (!key) return;
             var items = boneAliasLoad();
             items.push({ pattern: pattern, key: key });
