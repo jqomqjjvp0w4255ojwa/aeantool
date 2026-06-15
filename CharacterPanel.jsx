@@ -187,9 +187,9 @@
 
     function uniqueSeed() { return Math.floor(Math.random() * 900000) + 1000; }
 
-    // mouth 滑桿的「說話值」:有「張嘴 2」用 2,否則 1
+    // mouth 滑桿的「說話值」:說話嘴固定在 value 1(壓扁開合用)
     function talkValue(comp) {
-        return findLayer(comp, "張嘴 2") ? 2 : 1;
+        return 1;
     }
 
     // 在圖層錨點位置建一個「軸」Null,把圖層 parent 上去。
@@ -211,12 +211,12 @@
         return axis;
     }
 
-    // 只有閉嘴圖的角色:自動生一張簡易張嘴(深色橢圓 Shape)
+    // 只有「嘴」(閉著)的角色:自動生一張簡易說話嘴(深色橢圓 Shape)
     function createOpenMouth(comp, closedLay) {
         var w = 60, h = 40;
         try { w = Math.max(closedLay.width * 0.8, 30); h = Math.max(closedLay.width * 0.55, 20); } catch (e) {}
         var shape = comp.layers.addShape();
-        shape.name = "張嘴";
+        shape.name = "說話嘴";
         var grp = shape.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
         grp.name = "mouth";
         var ell = grp.property("ADBE Vectors Group").addProperty("ADBE Vector Shape - Ellipse");
@@ -230,15 +230,15 @@
         return shape;
     }
 
-    // 只有張嘴圖的角色:在嘴軸中心生一條閉嘴線(#7E594C 圓角端點),
-    // 長度參考張嘴圖寬,讓你自己調 Bezier 弧度。
+    // 只有張嘴/說話嘴圖的角色:在嘴軸中心生一條閉嘴線(#7E594C 圓角端點),
+    // 長度參考嘴圖寬,讓你自己調 Bezier 弧度。
     function createClosedMouth(comp, openLay) {
         var lineW = 60;
         try { lineW = Math.max(openLay.width * 0.75, 30); } catch (e) {}
         var half = lineW / 2;
 
         var shape = comp.layers.addShape();
-        shape.name = "閉嘴";
+        shape.name = "嘴";
         var vectors = shape.property("ADBE Root Vectors Group");
         var grp = vectors.addProperty("ADBE Vector Group");
         grp.name = "closed_mouth";
@@ -270,18 +270,18 @@
 
     // 每個標記:基準名 / 滑桿 / 慣例起始值(base)。
     // 同一個滑桿的值是一條連號序列:base 還沒被占用就用 base,已占用就接在目前最大值 +1。
-    //   嘴:0=閉嘴、1=張嘴,之後的嘴型一律 2、3、4…累加
+    //   嘴:0=嘴(閉)、1=說話嘴,說話嘴另複製一張靜態張嘴到 3,其餘嘴型 2、4、5…累加
     //   眼:0=睜眼、1=閉眼,之後累加(眼睛同理)
     //   眉/特效:從 base 開始一路累加
     var TAGS = {
-        "閉眼": { slider: "eye",   base: 1 },
-        "睜眼": { slider: "eye",   base: 0 },
-        "閉嘴": { slider: "mouth", base: 0 },
-        "張嘴": { slider: "mouth", base: 1 },
-        "眉":   { slider: "眉",    base: 0 },
-        "特效": { slider: "emo",   base: 1 }, // 廣義表情特效:汗滴、怒氣、驚訝符號、愛心…都可掛在 emo 滑桿上
-        "耳":   { slider: null },
-        "鼻":   { slider: null }
+        "閉眼":   { slider: "eye",   base: 1 },
+        "睜眼":   { slider: "eye",   base: 0 },
+        "嘴":     { slider: "mouth", base: 0 },                 // 閉著的嘴(value 0)
+        "說話嘴": { slider: "mouth", base: 1, dupStatic: 3 },   // 說話壓扁用嘴型(value 1),同時複製一張靜態張嘴到 value 3
+        "眉":     { slider: "眉",    base: 0 },
+        "特效":   { slider: "emo",   base: 1 }, // 廣義表情特效:汗滴、怒氣、驚訝符號、愛心…都可掛在 emo 滑桿上
+        "耳":     { slider: null },
+        "鼻":     { slider: null }
     };
 
     // 掃 comp,回傳某滑桿目前被哪些值占用(用於連號分配)。
@@ -349,6 +349,15 @@
                     var sliderName = sliderNameFor(comp, tag.slider);
                     var v = allocSliderValue(comp, sliderName, tag.base);
                     opacityProp(lay).expression = switchExpr(sliderName, v);
+
+                    // 「說話嘴」同時複製一張一般的張嘴(不動)到固定 value 3,給靜止張嘴用
+                    if (tag.dupStatic !== undefined) {
+                        var dupIdx = countByBase(comp, "張嘴");
+                        var dup = lay.duplicate();
+                        dup.name = (dupIdx === 0) ? "張嘴" : "張嘴 " + (dupIdx + 1);
+                        opacityProp(dup).expression = switchExpr(sliderName, tag.dupStatic);
+                        try { dup.moveAfter(lay); } catch (eDup) {}
+                    }
                 }
                 if (nulls && !lay.parent) {
                     if (base === "耳") lay.parent = nulls.ear;
@@ -528,27 +537,15 @@
         try {
             var ctrl = ensureControl(comp);
             var mouthName = sliderNameFor(comp, "mouth"); // 自動沿用 mouth 或 嘴
-            var open2 = findLayer(comp, "張嘴 2"), open1 = findLayer(comp, "張嘴"),
-                closed = findLayer(comp, "閉嘴");
-
-            // 「靜嘴」勾選框:勾選時即使 mouth 滑桿在說話值,嘴巴也不會開合擠壓
-            // (給「靜止張嘴」用——嘴張開但不動)
-            var fx = ctrl.property("ADBE Effect Parade");
-            var cbStill = fx.property("靜嘴");
-            if (!cbStill) {
-                cbStill = fx.addProperty("ADBE Checkbox Control");
-                cbStill.name = "靜嘴";
-                cbStill.property(1).setValue(0);
-            }
+            // 說話嘴(壓扁開合用,value 1)為擠壓目標;嘴(閉著,value 0)為閉嘴
+            var target = findLayer(comp, "說話嘴"), closed = findLayer(comp, "嘴");
 
             function squashExpr(activeVal) {
                 return [
                     "// === 說話擠壓(" + mouthName + " 滑桿 == " + activeVal + " 時啟動) ===",
                     's = thisComp.layer("control").effect("' + mouthName + '")("Slider");',
-                    "var still = false;",
-                    'try { still = thisComp.layer("control").effect("靜嘴")("Checkbox") == 1; } catch (e) {}',
                     "var speed = 9, amp = 45; // 開合速度 / 幅度(%)",
-                    "if (s == " + activeVal + " && !still) {",
+                    "if (s == " + activeVal + ") {",
                     "  var k = 1 - (amp / 100) * Math.abs(Math.sin(time * speed));",
                     "  // 相容 2D Null(嘴軸)與 3D 圖層",
                     "  value.length > 2 ? [value[0], value[1] * k, value[2]] : [value[0], value[1] * k];",
@@ -556,27 +553,22 @@
                 ].join("\n");
             }
 
-            var target = open2 || open1;
-            var v, generated = false;
+            var v = talkValue(comp), generated = false; // 說話嘴固定 value 1
 
             if (!target && closed) {
-                // 只有閉嘴圖:自動生一張簡易張嘴,之後走標準閉/張切換
+                // 只有「嘴」(閉著):自動生一張簡易說話嘴,之後走標準閉/說切換
                 target = createOpenMouth(comp, closed);
-                opacityProp(target).expression = switchExpr(mouthName, 1);
+                opacityProp(target).expression = switchExpr(mouthName, v);
                 opacityProp(closed).expression = switchExpr(mouthName, 0);
-                v = 1;
                 generated = true;
             } else if (target && !closed) {
-                // 只有張嘴圖:自動生一條閉嘴線(#7E594C 圓角),走標準閉/張切換
+                // 只有說話嘴/張嘴:自動生一條閉嘴線(#7E594C 圓角),走標準閉/說切換
                 closed = createClosedMouth(comp, target);
                 opacityProp(closed).expression = switchExpr(mouthName, 0);
-                opacityProp(target).expression = switchExpr(mouthName, open2 ? 2 : 1);
-                v = open2 ? 2 : 1;
+                opacityProp(target).expression = switchExpr(mouthName, v);
                 generated = "open_only";
-            } else if (target) {
-                v = open2 ? 2 : 1;
-            } else {
-                alert("找不到「張嘴」或「閉嘴」圖層,請先在「標記」頁標記嘴巴圖層。");
+            } else if (!target) {
+                alert("找不到「說話嘴」或「嘴」圖層,請先在「標記」頁標記嘴巴圖層。");
                 return;
             }
 
@@ -588,18 +580,17 @@
                       "用下面的「開始/停止說話」按鈕打 key 即可。\n\n" +
                       "嘴如果是斜的:把「嘴軸」的 Rotation 轉到跟嘴同角度,\n" +
                       "美術不會跟著轉,開合就會沿嘴的方向、不會歪。\n\n" +
-                      "【靜止張嘴】control 上多了「靜嘴」勾選框:\n" +
-                      "勾選後,即使 " + mouthName + " 在說話值,嘴巴也只張開不開合,\n" +
-                      "適合角色靜止張嘴(如唱歌長音)的演出。";
+                      "【靜止張嘴】標記「說話嘴」時已順便複製一張靜態張嘴到 " + mouthName + " = 3,\n" +
+                      "演出時想要嘴張開但不動(如唱歌長音),把滑桿 key 到 3 即可。";
             if (generated === true) {
-                msg += "\n\n此角色原本只有閉嘴圖,我生了一個深色橢圓 Shape 當「張嘴」,\n" +
+                msg += "\n\n此角色原本只有「嘴」(閉著),我生了一個深色橢圓 Shape 當「說話嘴」,\n" +
                        "請花十秒調一下它的大小和顏色,讓它貼合畫風。";
             } else if (generated === "open_only") {
-                msg += "\n\n此角色只有張嘴圖,我已自動生成一條「閉嘴」線段(#7E594C 圓角)。\n" +
+                msg += "\n\n此角色只有張開的嘴,我已自動生成一條「嘴」線段(#7E594C 圓角)。\n" +
                        "位置在嘴軸中心,你可以:\n" +
-                       "  1. 選取「閉嘴」圖層 → 用鋼筆工具拉 Bezier 弧度調成你要的曲線\n" +
+                       "  1. 選取「嘴」圖層 → 用鋼筆工具拉 Bezier 弧度調成你要的曲線\n" +
                        "  2. 調整 Stroke 寬度/顏色讓它配合角色畫風\n" +
-                       "滑桿 = 0 → 顯示閉嘴線 / 滑桿 = " + v + " → 顯示張嘴圖,正常切換。";
+                       "滑桿 = 0 → 顯示閉嘴線 / 滑桿 = " + v + " → 顯示說話嘴,正常切換。";
             }
             alert(msg);
         } finally { app.endUndoGroup(); }
@@ -1535,13 +1526,13 @@
         var p1 = makeTab("標記");
         p1.add("statictext", undefined, "先選圖層再按按鈕:  [v2.0]");
         var rowA = p1.add("group"); var rowB = p1.add("group");
-        var tagOrder = ["閉眼", "睜眼", "閉嘴", "張嘴", "眉", "特效", "耳", "鼻"];
+        var tagOrder = ["閉眼", "睜眼", "嘴", "說話嘴", "眉", "特效", "耳", "鼻"];
         var fullRigCheck;
         for (var i = 0; i < tagOrder.length; i++) {
             var row = (i < 4) ? rowA : rowB;
             (function (base) {
                 var b = row.add("button", undefined, base);
-                b.preferredSize.width = 52;
+                b.preferredSize.width = (base.length > 2) ? 64 : 52;
                 b.onClick = function () { doTag(base, fullRigCheck.value); };
             })(tagOrder[i]);
         }
