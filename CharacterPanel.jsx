@@ -99,6 +99,22 @@
         return null;
     }
 
+    // 從 comp 往內找到「含 control 的合成」,回傳 { comp, chain }。
+    // chain 是從 comp 往內、一路到含 control 那層之間的圖層串(外→內),用來換算時間。
+    // 角色結構常是:外層 → 角色precomp → 頭precomp(含 control),control 不在最外層,要往內挖。
+    function findControlChain(comp, depthLimit) {
+        if (findLayer(comp, "control")) return { comp: comp, chain: [] };
+        if (depthLimit <= 0) return null;
+        for (var i = 1; i <= comp.numLayers; i++) {
+            var L = comp.layer(i);
+            if (L.source instanceof CompItem) {
+                var r = findControlChain(L.source, depthLimit - 1);
+                if (r) return { comp: r.comp, chain: [L].concat(r.chain) };
+            }
+        }
+        return null;
+    }
+
     function countByBase(comp, base) {
         var n = 0;
         for (var i = 1; i <= comp.numLayers; i++) {
@@ -149,6 +165,8 @@
             if (!found) {
                 var s = fx.addProperty("ADBE Slider Control");
                 s.name = names[0];
+                // 滑桿預設值固定為 0:eye=0 睜眼、mouth=0 第一張嘴、眉=0 第一個眉毛、emo=0 無特效
+                try { s.property(1).setValue(0); } catch (e0) {}
             }
         }
         if (!fx.property("face position")) {
@@ -299,18 +317,18 @@
         return shape;
     }
 
-    // 只有張嘴/說話嘴圖的角色:在嘴軸中心生一條閉嘴線(#7E594C 圓角端點),
-    // 長度參考嘴圖寬,讓你自己調 Bezier 弧度。
-    function createClosedMouth(comp, openLay) {
+    // 在 refLay 位置生一條圓角端點短線段(#7E594C,6px),長度參考 refLay 寬 * widthRatio。
+    // 給「閉嘴」「眉毛佔位」等需要簡單線段起點的場合共用,之後自己拉 Bezier 弧度/改形狀。
+    function createPlaceholderLine(comp, refLay, shapeName, groupName, widthRatio) {
         var lineW = 60;
-        try { lineW = Math.max(openLay.width * 0.75, 30); } catch (e) {}
+        try { lineW = Math.max(refLay.width * widthRatio, 30); } catch (e) {}
         var half = lineW / 2;
 
         var shape = comp.layers.addShape();
-        shape.name = "嘴";
+        shape.name = shapeName;
         var vectors = shape.property("ADBE Root Vectors Group");
         var grp = vectors.addProperty("ADBE Vector Group");
-        grp.name = "closed_mouth";
+        grp.name = groupName;
         var pathGrp = grp.property("ADBE Vectors Group");
 
         // 路徑:水平直線,兩端之後可自行拉成曲線
@@ -328,11 +346,16 @@
         stroke.property("ADBE Vector Stroke Width").setValue(6);
         stroke.property("ADBE Vector Stroke Line Cap").setValue(2); // Round Cap
 
-        var pos = openLay.property("ADBE Transform Group").property("ADBE Position").value;
+        var pos = refLay.property("ADBE Transform Group").property("ADBE Position").value;
         shape.property("ADBE Transform Group").property("ADBE Position").setValue(pos);
-        if (openLay.parent) shape.parent = openLay.parent;
-        shape.moveBefore(openLay);
+        if (refLay.parent) shape.parent = refLay.parent;
+        shape.moveBefore(refLay);
         return shape;
+    }
+
+    // 只有張嘴/說話嘴圖的角色:在嘴軸中心生一條閉嘴線,長度參考嘴圖寬,讓你自己調 Bezier 弧度。
+    function createClosedMouth(comp, openLay) {
+        return createPlaceholderLine(comp, openLay, "嘴", "closed_mouth", 0.75);
     }
 
     // ================= 1. 標記 =================
@@ -423,14 +446,31 @@
                     try { dup.moveBefore(src); } catch (eMv) {}
                     made++;
                 }
+                // 沒有「嘴」(閉嘴)→ 自動生一條閉嘴線,避免說話嘴沒有對應的閉嘴狀態
+                var closedLay = findLayer(comp, "嘴");
+                var generatedClosed = false;
+                if (!closedLay) {
+                    var anyTalk = collectByBase(comp, "說話嘴")[0];
+                    closedLay = createClosedMouth(comp, anyTalk);
+                    closedLay.name = "嘴";
+                    var closedVal = allocSliderValue(comp, mouthName, 0);
+                    opacityProp(closedLay).expression = switchExpr(mouthName, closedVal);
+                    generatedClosed = true;
+                }
+
                 // 所有說話嘴共用同一個「嘴軸」並重設開合表達式(不會冒出一堆嘴軸)
                 var infoArr = applyTalkSquash(comp, mouthName);
                 var lines = [];
                 for (var n = 0; n < infoArr.length; n++) lines.push("「" + infoArr[n].name + "」= " + infoArr[n].val);
-                alert("已新增 " + made + " 張說話嘴(壓縮開合動態),原嘴型不變。\n" +
+                var msgTalk = "已新增 " + made + " 張說話嘴(壓縮開合動態),原嘴型不變。\n" +
                       "目前所有說話嘴(共用一個「嘴軸」):\n  " + lines.join("\n  ") +
                       "\n\n演出時把 " + mouthName +
-                      " 滑桿切到對應值就會說話開合;切到原本的嘴型值則是靜態嘴。");
+                      " 滑桿切到對應值就會說話開合;切到原本的嘴型值則是靜態嘴。";
+                if (generatedClosed) {
+                    msgTalk += "\n\n此角色原本沒有閉嘴,已自動生成一條「嘴」線段(#7E594C 圓角,值 = " + closedVal + ")。\n" +
+                               "位置在嘴軸中心,可用鋼筆工具拉 Bezier 弧度、調 Stroke 配合畫風。";
+                }
+                alert(msgTalk);
                 return;
             }
 
@@ -453,6 +493,35 @@
                     else if (tag.slider === "eye" || tag.slider === "眉") lay.parent = nulls.eye;
                     else if (tag.slider === "mouth") lay.parent = nulls.mouth;
                 }
+            }
+
+            // 第一次標記「眉」(value 0)、目前 comp 裡只有這一個眉 → 自動生 2 條佔位短線段(眉2、眉3),
+            // 當挑眉/怒眉等其他表情的起點,已綁好滑桿值,改完形狀/位置即可,不用手動改表達式。
+            // 之後要再加表情:複製其中一張眉,選取後再按一次「眉」按鈕,面板會自動接續編號與滑桿值。
+            if (base === "眉" && countByBase(comp, "眉") === 1) {
+                var browLay = findLayer(comp, "眉");
+                var browSliderName = sliderNameFor(comp, "眉");
+                for (var bIdx = 2; bIdx <= 3; bIdx++) {
+                    var ph = createPlaceholderLine(comp, browLay, "眉 " + bIdx, "brow_placeholder", 0.6);
+                    var phVal = allocSliderValue(comp, browSliderName, tag.base);
+                    opacityProp(ph).expression = switchExpr(browSliderName, phVal);
+                }
+                alert("已在「眉」位置生成 2 條佔位短線段(眉 2、眉 3),已綁好 " + browSliderName + " 滑桿值。\n" +
+                      "拿來當挑眉/怒眉等其他表情的起點,改形狀/位置貼合畫風即可。\n\n" +
+                      "之後要再加表情:複製其中一張眉,選取後再按一次「眉」按鈕,\n" +
+                      "面板會自動接續編號(眉 4…)與滑桿值,不用手動改表達式。");
+            }
+
+            // 第一次標記「嘴」(閉嘴 value 0)、還沒有「說話嘴」→ 自動生一張說話嘴並套上開合動態
+            if (base === "嘴" && collectByBase(comp, "說話嘴").length === 0) {
+                var baseMouth = findLayer(comp, "嘴");
+                var mouthNameG = sliderNameFor(comp, "mouth");
+                var openLay = createOpenMouth(comp, baseMouth);
+                opacityProp(openLay).expression = switchExpr(mouthNameG, nextSliderValue(comp, mouthNameG));
+                openLay.name = "說話嘴";
+                applyTalkSquash(comp, mouthNameG);
+                alert("目前沒有「說話嘴」,已自動生成一張深色橢圓當說話嘴並套上開合動態。\n" +
+                      "請花十秒調整「說話嘴」圖層的大小/顏色,讓它貼合畫風。");
             }
         } finally { app.endUndoGroup(); }
     }
@@ -805,8 +874,11 @@
         { zh:"身體",  en:"body",      cat:"身體" },
         { zh:"衣服",  en:"cloth",     cat:"身體" },
         { zh:"裙子",  en:"skirt",     cat:"身體" },
+        { zh:"褲子",  en:"pants",     cat:"身體" },
         { zh:"腰帶",  en:"belt",      cat:"身體" },
         { zh:"屁股",  en:"hip",       cat:"身體" },
+        { zh:"手",    en:"hand",      cat:"身體" },
+        { zh:"腳",    en:"foot",      cat:"身體" },
 
         // 手臂只分上下臂(各左右),整隻沒拆的就命名為「上臂」
         { zh:"上臂左", en:"arm_up_L",  cat:"手臂" },
@@ -825,7 +897,17 @@
         { zh:"包包",  en:"bag",       cat:"配件" },
         { zh:"尾巴",  en:"tail",      cat:"配件" },
         { zh:"陰影",  en:"shadow",    cat:"配件" },
-        { zh:"光",    en:"light",     cat:"配件" }
+        { zh:"光",    en:"light",     cat:"配件" },
+
+        // 較少用的配件,命名頁預設收合在「更多配件」裡
+        { zh:"眼鏡",  en:"glasses",   cat:"配件2" },
+        { zh:"圍巾",  en:"scarf",     cat:"配件2" },
+        { zh:"項鍊",  en:"necklace",  cat:"配件2" },
+        { zh:"翅膀",  en:"wing",      cat:"配件2" },
+        { zh:"寶石",  en:"gem",       cat:"配件2" },
+        { zh:"鈕扣",  en:"button",    cat:"配件2" },
+        { zh:"鞋",    en:"shoe",      cat:"配件2" },
+        { zh:"線",    en:"line",      cat:"配件2" }
     ];
 
     // 反向語序別名(左上臂/左大腿…)：只用於中英轉換比對，不出現在命名按鈕上。
@@ -1029,6 +1111,93 @@
             for (var i = 1; i < sel.length; i++) sel[i].parent = n;
         } finally { app.endUndoGroup(); }
         alert(sel.length + " 個圖層已綁到「" + nm + "」之下,劇情動作打在它身上。");
+    }
+
+    // 算圖層在 comp 座標下的外框(來源:sourceRectAtTime + toComp,跟 doTrimToContent 同作法)
+    function layerBBox(layer, t) {
+        try {
+            var r = layer.sourceRectAtTime(t, false);
+            if (r.width <= 0 || r.height <= 0) return null;
+            var corners = [
+                [r.left,           r.top],
+                [r.left + r.width, r.top],
+                [r.left,           r.top + r.height],
+                [r.left + r.width, r.top + r.height]
+            ];
+            var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (var c = 0; c < corners.length; c++) {
+                var pt = layer.toComp(corners[c]);
+                if (pt[0] < minX) minX = pt[0];
+                if (pt[1] < minY) minY = pt[1];
+                if (pt[0] > maxX) maxX = pt[0];
+                if (pt[1] > maxY) maxY = pt[1];
+            }
+            return { minX: minX, minY: minY, maxX: maxX, maxY: maxY };
+        } catch (e) { return null; }
+    }
+
+    function bboxOverlapArea(a, b) {
+        var w = Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX);
+        var h = Math.min(a.maxY, b.maxY) - Math.max(a.minY, b.minY);
+        if (w <= 0 || h <= 0) return 0;
+        return w * h;
+    }
+
+    function isDescendant(layer, maybeAncestor) {
+        var p = layer.parent;
+        while (p) { if (p === maybeAncestor) return true; p = p.parent; }
+        return false;
+    }
+
+    // ── 依重疊自動綁父層:給對照表/骨架規則涵蓋不到的零件用(褲子線、OOline、寶石、包包…)──
+    // 對每個選取的圖層,在時間軸「它下面」的圖層裡找畫面重疊比例最高的一個當 parent。
+    // 用目前時間那一格的外框比對,門檻 20% 以下不綁(避免亂猜)。
+    var OVERLAP_THRESHOLD = 0.2;
+
+    function doAutoParentByOverlap() {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先選取要綁定的零件圖層(可複選),再按此鈕。"); return; }
+        var t = comp.time;
+
+        app.beginUndoGroup("依重疊自動綁父層");
+        var linked = 0, skipped = [], noMatch = [];
+        try {
+            for (var s = 0; s < sel.length; s++) {
+                var lay = sel[s];
+                if (lay.parent) { skipped.push(lay.name); continue; }
+                var bbox = layerBBox(lay, t);
+                if (!bbox) { noMatch.push(lay.name + "(取不到外框)"); continue; }
+                var area = (bbox.maxX - bbox.minX) * (bbox.maxY - bbox.minY);
+
+                var best = null, bestRatio = 0;
+                for (var i = 1; i <= comp.numLayers; i++) {
+                    var cand = comp.layer(i);
+                    if (cand === lay) continue;
+                    if (cand.index <= lay.index) continue; // 只找「下面」的圖層
+                    if (cand.nullLayer || cand.adjustmentLayer) continue;
+                    if (isDescendant(cand, lay)) continue; // 避免互為父子造成循環
+                    var cbbox = layerBBox(cand, t);
+                    if (!cbbox) continue;
+                    var ratio = bboxOverlapArea(bbox, cbbox) / area;
+                    if (ratio > bestRatio) { bestRatio = ratio; best = cand; }
+                }
+
+                if (best && bestRatio >= OVERLAP_THRESHOLD) {
+                    lay.parent = best;
+                    linked++;
+                } else {
+                    noMatch.push(lay.name + (best
+                        ? "(最高重疊 " + Math.round(bestRatio * 100) + "%,低於門檻)"
+                        : "(下方找不到有重疊的圖層)"));
+                }
+            }
+        } finally { app.endUndoGroup(); }
+
+        var msg = "已自動綁定 " + linked + " 個零件。";
+        if (skipped.length)  msg += "\n已跳過(原本就有 parent):\n  " + skipped.join("、");
+        if (noMatch.length)  msg += "\n沒綁到(請手動設定 parent):\n  " + noMatch.join("、");
+        showStatus(msg);
     }
 
     // ── 縮小 comp 到有圖層內容的最小範圍 ──────────────────────
@@ -1252,6 +1421,52 @@
         } finally { app.endUndoGroup(); }
         alert(count === 0 ? "選取的圖層上找不到可調速的表達式(speed / period / wiggle)。"
                           : "已調整 " + count + " 個表達式,倍速 ×" + m + "。");
+    }
+
+    // 在 wiggle(freq, amp) 裡把第二個參數(幅度)乘上倍率
+    function scaleWiggleAmp(ex, factor) {
+        var idx = ex.indexOf("wiggle(");
+        if (idx === -1) return null;
+        var start = idx + "wiggle(".length;
+        // 跳過第一個參數(頻率)到逗號
+        var comma = ex.indexOf(",", start);
+        if (comma === -1) return null;
+        var p = comma + 1;
+        while (p < ex.length && ex.charAt(p) === " ") p++;
+        var end = p;
+        while (end < ex.length && "0123456789.".indexOf(ex.charAt(end)) !== -1) end++;
+        var num = parseFloat(ex.substring(p, end));
+        if (isNaN(num)) return null;
+        var v = Math.round(num * factor * 100) / 100;
+        return ex.substring(0, p) + v + ex.substring(end);
+    }
+
+    // 表達式倍幅:把面板動態的「幅度」放大/縮小(呼吸/漂浮/擺動的 amp、說話開合 amp、wiggle 幅度)。
+    // 倍速只改快慢,倍幅才改「動多大」—— 感覺沒差通常是因為幅度太小,用這個放大。
+    function retimeExprAmp() {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先選取掛了動態表達式的圖層。"); return; }
+        var m = promptStepper("表達式倍幅", "倍幅?(2 = 幅度兩倍,0.5 = 一半)", 1, 0.1);
+        if (m === null) return;
+        if (m <= 0) { alert("要輸入正數。"); return; }
+
+        var count = 0;
+        app.beginUndoGroup("表達式倍幅");
+        try {
+            for (var s = 0; s < sel.length; s++) {
+                var props = [];
+                scanExprProps(sel[s], props);
+                for (var p = 0; p < props.length; p++) {
+                    var ex = props[p].expression, changed = false, r;
+                    r = scaleNumber(ex, "amp = ", m);     if (r !== null) { ex = r; changed = true; }
+                    r = scaleWiggleAmp(ex, m);            if (r !== null) { ex = r; changed = true; }
+                    if (changed) { props[p].expression = ex; count++; }
+                }
+            }
+        } finally { app.endUndoGroup(); }
+        alert(count === 0 ? "選取的圖層上找不到可調幅度的表達式(amp / wiggle)。"
+                          : "已調整 " + count + " 個表達式,幅度 ×" + m + "。");
     }
 
     // ---- 常用表達式庫(存在 AE 偏好設定,跨專案永久保留) ----
@@ -1676,18 +1891,40 @@
             }
         }
 
+        // 「配件2」(眼鏡/圍巾/項鍊/翅膀/寶石/鈕扣/鞋/線等較少用配件)預設收合,
+        // 用一顆「更多配件 ▾/▴」按鈕展開/收合,避免命名頁一長串。
+        var moreAccessoriesOpen = false;
+
         function rebuildNames() {
             while (nameGrid.children.length > 0) nameGrid.remove(nameGrid.children[0]);
             var allItems = fullMap();
             var cats = getCategories(allItems);
             for (var c = 0; c < cats.length; c++) {
                 var cat = cats[c];
+                if (cat === "配件2") continue; // 另外處理(收合區塊)
                 var catItems = [];
                 for (var k = 0; k < allItems.length; k++) {
                     if ((allItems[k].cat || "其他") === cat) catItems.push(allItems[k]);
                 }
                 addCategoryRow(cat, catItems);
             }
+
+            // ── 更多配件(收合區塊)──
+            var moreItems = [];
+            for (var m = 0; m < allItems.length; m++) {
+                if ((allItems[m].cat || "其他") === "配件2") moreItems.push(allItems[m]);
+            }
+            if (moreItems.length > 0) {
+                var rowToggle = nameGrid.add("group");
+                var bToggle = rowToggle.add("button", undefined, moreAccessoriesOpen ? "更多配件 ▴" : "更多配件 ▾");
+                bToggle.preferredSize.width = 90;
+                bToggle.onClick = function () {
+                    moreAccessoriesOpen = !moreAccessoriesOpen;
+                    rebuildNames();
+                };
+                if (moreAccessoriesOpen) addCategoryRow("", moreItems);
+            }
+
             // 自訂項目單獨一列
             var customs = nameMapLoad();
             if (customs.length > 0) addCategoryRow("自訂", customs);
@@ -1798,6 +2035,15 @@
                   "告訴面板你的某個前綴對應到哪個規則 key。");
         };
 
+        // ── 零件綁定:選取的零件自動掛到下方畫面重疊比例最高的圖層(對照表/骨架涵蓋不到的雜項)──
+        var rowPart = p6.add("group");
+        var labPart = rowPart.add("statictext", undefined, "零件:"); labPart.preferredSize.width = 70;
+        var bPart = rowPart.add("button", undefined, "依重疊自動綁父層"); bPart.preferredSize.width = 130;
+        bPart.onClick = doAutoParentByOverlap;
+        var rowPart2 = p6.add("group");
+        rowPart2.add("statictext", undefined, "").preferredSize.width = 70;
+        rowPart2.add("statictext", undefined, "選零件(褲子線/寶石/包包…),自動綁到下方重疊最多的圖層(已有parent的會跳過)");
+
         // ── 綁定別名(使用者自訂命名 → 骨架規則 key)───────────
         var rowAlias = p6.add("group");
         var labAlias = rowAlias.add("statictext", undefined, "綁定別名:"); labAlias.preferredSize.width = 70;
@@ -1858,8 +2104,11 @@
         var rowRt = p2.add("group");
         var bLoopT = rowRt.add("button", undefined, "循環 key 節奏…"); bLoopT.preferredSize.width = 110;
         var bExprT = rowRt.add("button", undefined, "表達式倍速…");   bExprT.preferredSize.width = 110;
+        var bExprA = rowRt.add("button", undefined, "表達式倍幅…");   bExprA.preferredSize.width = 110;
         bLoopT.onClick = retimeLoopKeys;
         bExprT.onClick = retimeExprSpeed;
+        bExprA.onClick = retimeExprAmp;
+        p2.add("statictext", undefined, "倍速=改快慢(speed/period/wiggle頻率);倍幅=改動多大(amp/wiggle幅度)。覺得沒差就調倍幅。");
 
         // --- 演出(手動下 key:人待在主場景,key 寫進角色的 control) ---
         var p3 = makeTab("演出(手動Key)");
@@ -1890,10 +2139,12 @@
         refreshRigComps();
         bScan.onClick = refreshRigComps;
 
-        // ── 鎖定角色:可直接鎖「目前選取的角色圖層」(在外層合成裡的頭/角色 precomp),
-        // 之後下 key 會自動換算成該角色內部的時間,不用切進頭合成。
-        // 若該角色合成本身就有 control(沒有額外的頭/角色 comp),也可直接鎖目前合成。
-        var lockedTarget = null; // { comp, layer } ; layer 為 null 表示直接鎖目前合成本身
+        // ── 鎖定角色:在外層合成選取角色圖層即可,control 不必在角色 precomp 的第一層 ──
+        // 會自動往內挖(角色 precomp → 頭 precomp …)找到含 control 的合成,
+        // 下 key 時自動把外層時間換算成該角色內部合成的時間,不用切進頭合成。
+        // 若目前合成本身就有 control(無頭層結構),也可不選圖層直接鎖目前合成。
+        // layerChain:從外層選取圖層往內、到含 control 那層之間的圖層串(外→內);空陣列=直接鎖目前合成。
+        var lockedTarget = null; // { comp, layerChain:[...] }
         var rowLock = p3.add("group");
         var bLock = rowLock.add("button", undefined, "鎖定選取角色圖層"); bLock.preferredSize.width = 140;
         var bUnlock = rowLock.add("button", undefined, "解除鎖定"); bUnlock.preferredSize.width = 80;
@@ -1903,30 +2154,36 @@
             var c = app.project.activeItem;
             if (!(c instanceof CompItem)) { alert("先點開外層合成,選取角色圖層再按此按鈕。"); return; }
             var sel = c.selectedLayers;
-            if (sel.length > 0 && sel[0].source instanceof CompItem && findLayer(sel[0].source, "control")) {
-                lockedTarget = { comp: sel[0].source, layer: sel[0] };
-                lockLabel.text = "已鎖定:「" + sel[0].name + "」(內部合成:" + sel[0].source.name + ")";
-                return;
+            if (sel.length > 0 && sel[0].source instanceof CompItem) {
+                // 往內挖最多 6 層,找到含 control 的合成(control 可能在頭 precomp 裡)
+                var r = findControlChain(sel[0].source, 6);
+                if (r) {
+                    lockedTarget = { comp: r.comp, layerChain: [sel[0]].concat(r.chain) };
+                    lockLabel.text = "已鎖定:「" + sel[0].name + "」(control 在:" + r.comp.name + ")";
+                    return;
+                }
             }
             if (findLayer(c, "control")) {
-                lockedTarget = { comp: c, layer: null };
+                lockedTarget = { comp: c, layerChain: [] };
                 lockLabel.text = "已鎖定:目前合成「" + c.name + "」本身(無頭層結構)";
                 return;
             }
             alert("找不到可鎖定的角色。\n" +
-                  "請選取一個「來源合成內含 control」的角色圖層,\n" +
-                  "或直接打開角色本身就有 control 的合成(無頭層結構)。");
+                  "請在外層合成選取一個角色圖層(它的來源合成裡、或更內層含有 control),\n" +
+                  "或直接打開角色本身就有 control 的合成(無頭層結構)。\n\n" +
+                  "提示:control 圖層名稱必須剛好是「control」(英文小寫),面板才認得;\n" +
+                  "角色圖層本身叫什麼名字(中文英文都行)沒關係。");
         };
         bUnlock.onClick = function () {
             lockedTarget = null;
             lockLabel.text = "(未鎖定,使用上面下拉選的角色)";
         };
 
-        // 鎖定的圖層可能被使用者刪掉/換掉,存取前先確認還活著。失效就自動解鎖。
+        // 鎖定的圖層串可能被使用者刪掉/換掉,存取前先確認最外層那個還活著。失效就自動解鎖。
         function lockedLayerAlive() {
-            if (!(lockedTarget && lockedTarget.layer)) return false;
+            if (!(lockedTarget && lockedTarget.layerChain && lockedTarget.layerChain.length)) return false;
             try {
-                var _ = lockedTarget.layer.containingComp; // 已刪除的圖層存取會丟錯
+                var _ = lockedTarget.layerChain[0].containingComp; // 已刪除的圖層存取會丟錯
                 return true;
             } catch (e) {
                 lockedTarget = null;
@@ -1937,7 +2194,7 @@
 
         function targetComp() {
             if (lockedTarget) {
-                if (lockedTarget.layer && !lockedLayerAlive()) {
+                if (lockedTarget.layerChain.length && !lockedLayerAlive()) {
                     // 圖層失效後 lockedTarget 已被清空,落回下拉選單
                 } else {
                     return lockedTarget.comp;
@@ -1948,15 +2205,19 @@
         }
 
         // 用「目前開著的合成」的時間下 key(你們所有合成都是同一條全片時間軸)
-        // 若鎖定的是外層合成裡的角色層,換算成該角色內部合成的時間。
+        // 若鎖定的是外層合成裡的角色層,沿著 layerChain 一路把外層時間換算成最內層 control 合成的時間。
         function nowTime(tc) {
             if (lockedLayerAlive()) {
-                var layer = lockedTarget.layer;
-                var outer = layer.containingComp;
-                return (outer.time - layer.startTime) * 100 / layer.stretch;
+                var chain = lockedTarget.layerChain;
+                var a = app.project.activeItem;
+                var t = (a instanceof CompItem) ? a.time : chain[0].containingComp.time;
+                for (var i = 0; i < chain.length; i++) {
+                    t = (t - chain[i].startTime) * 100 / chain[i].stretch;
+                }
+                return t;
             }
-            var a = app.project.activeItem;
-            return (a instanceof CompItem) ? a.time : tc.time;
+            var a2 = app.project.activeItem;
+            return (a2 instanceof CompItem) ? a2.time : tc.time;
         }
 
         function remoteKey(role, val) {
@@ -2039,7 +2300,7 @@
         var bFlash = rowShort.add("button", undefined, "閃爍"); bFlash.preferredSize.width = 70;
 
         function needLockedLayer() {
-            if (lockedLayerAlive()) return lockedTarget.layer;
+            if (lockedLayerAlive()) return lockedTarget.layerChain[0];
             alert("這個快捷鍵需要先在外層合成選取角色圖層,\n再按上面的「鎖定選取角色圖層」。");
             return null;
         }
