@@ -2132,18 +2132,47 @@
         charDrop.preferredSize.width = 150;
         var bScan = rowChar.add("button", undefined, "↻"); bScan.preferredSize.width = 30;
 
+        // 找「直接引用 comp 當圖層來源」的上層合成名稱(通常就是角色 precomp);
+        // 用來在多個角色的頭合成都叫 head 時,加前綴區分(例:小明 ▸ head)。
+        function ownerCompName(comp) {
+            try {
+                for (var i = 1; i <= app.project.numItems; i++) {
+                    var c = app.project.item(i);
+                    if (!(c instanceof CompItem) || c === comp) continue;
+                    for (var j = 1; j <= c.numLayers; j++) {
+                        if (c.layer(j).source === comp) return c.name;
+                    }
+                }
+            } catch (e) {}
+            return null;
+        }
+
         function refreshRigComps() {
             rigComps = [];
             charDrop.removeAll();
             try {
+                // 先掃出所有含 control 的合成,並統計同名次數
+                var nameCount = {};
                 for (var i = 1; i <= app.project.numItems; i++) {
                     var it = app.project.item(i);
                     if (it instanceof CompItem && findLayer(it, "control")) {
                         rigComps.push(it);
-                        var folder = (it.parentFolder && it.parentFolder.name !== "Root")
-                                   ? "  [" + it.parentFolder.name + "]" : "";
-                        charDrop.add("item", it.name + folder);
+                        nameCount[it.name] = (nameCount[it.name] || 0) + 1;
                     }
+                }
+                for (var k = 0; k < rigComps.length; k++) {
+                    var rc = rigComps[k];
+                    var label;
+                    if (nameCount[rc.name] > 1) {
+                        // 重名(多個 head…)→ 用引用它的角色合成名當前綴
+                        var owner = ownerCompName(rc);
+                        label = owner ? (owner + " ▸ " + rc.name) : (rc.name + " #" + (k + 1));
+                    } else {
+                        var folder = (rc.parentFolder && rc.parentFolder.name !== "Root")
+                                   ? "  [" + rc.parentFolder.name + "]" : "";
+                        label = rc.name + folder;
+                    }
+                    charDrop.add("item", label);
                 }
             } catch (e) {}
             if (charDrop.items.length > 0) charDrop.selection = 0;
