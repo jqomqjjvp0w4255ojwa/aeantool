@@ -57,16 +57,19 @@
         d.alignChildren = ["fill", "top"];
         d.add("statictext", undefined, label);
         var g = d.add("group");
-        var minus = g.add("button", undefined, "−"); minus.preferredSize.width = 26;
         var et = g.add("edittext", undefined, String(value)); et.preferredSize.width = 60;
-        var plus = g.add("button", undefined, "+"); plus.preferredSize.width = 26;
-        minus.onClick = function () {
-            var v = parseFloat(et.text); if (isNaN(v)) v = value;
-            et.text = String(Math.round((v - step) * 100) / 100);
-        };
-        plus.onClick = function () {
+        var spin = g.add("group");
+        spin.orientation = "column";
+        spin.spacing = 0;
+        var up = spin.add("button", undefined, "▲"); up.preferredSize.width = 22; up.preferredSize.height = 11;
+        var down = spin.add("button", undefined, "▼"); down.preferredSize.width = 22; down.preferredSize.height = 11;
+        up.onClick = function () {
             var v = parseFloat(et.text); if (isNaN(v)) v = value;
             et.text = String(Math.round((v + step) * 100) / 100);
+        };
+        down.onClick = function () {
+            var v = parseFloat(et.text); if (isNaN(v)) v = value;
+            et.text = String(Math.round((v - step) * 100) / 100);
         };
         var btns = d.add("group");
         btns.alignment = "right";
@@ -168,6 +171,73 @@
         return layer.property("ADBE Transform Group").property("ADBE Scale");
     }
 
+    // 讀某圖層不透明度表達式裡綁的滑桿值(switchExpr 寫的 == N),讀不到回傳 null
+    function layerSliderVal(layer) {
+        try {
+            var ex = opacityProp(layer).expression;
+            var m = ex.match(new RegExp("==\\s*(\\d+)"));
+            if (m) return parseInt(m[1], 10);
+        } catch (e) {}
+        return null;
+    }
+
+    // 收集名稱為 base 或「base」「base N」家族的所有圖層
+    function collectByBase(comp, base) {
+        var out = [];
+        for (var i = 1; i <= comp.numLayers; i++) {
+            var nm = comp.layer(i).name;
+            if (nm === base || nm.indexOf(base + " ") === 0) out.push(comp.layer(i));
+        }
+        return out;
+    }
+
+    // 說話開合擠壓表達式:掛在共用「嘴軸」Null 的 Scale 上。
+    // mouth 滑桿等於「任何一個說話值」時就開合(同時只有一張嘴可見,故可共用一個嘴軸)。
+    function squashMouthExpr(mouthName, activeVals) {
+        return [
+            "// === 說話開合擠壓(共用嘴軸;mouth 滑桿在說話值時開合) ===",
+            "var talk = [" + activeVals.join(", ") + "]; // 各說話嘴的值",
+            's = thisComp.layer("control").effect("' + mouthName + '")("Slider");',
+            "var speed = 9, amp = 45; // 開合速度 / 幅度(%)",
+            "var on = false;",
+            "for (var i = 0; i < talk.length; i++) { if (s == talk[i]) on = true; }",
+            "if (on) {",
+            "  var k = 1 - (amp / 100) * Math.abs(Math.sin(time * speed));",
+            "  // 相容 2D Null(嘴軸)與 3D 圖層",
+            "  value.length > 2 ? [value[0], value[1] * k, value[2]] : [value[0], value[1] * k];",
+            "} else { value; }"
+        ].join("\n");
+    }
+
+    // 把所有「說話嘴」掛到同一個共用「嘴軸」,並重設開合表達式。回傳 [{name,val}...]。
+    function applyTalkSquash(comp, mouthName) {
+        var talkMouths = collectByBase(comp, "說話嘴");
+        if (talkMouths.length === 0) return [];
+
+        // 建/沿用單一共用嘴軸(放在第一張說話嘴的位置)
+        var axis = findLayer(comp, "嘴軸");
+        if (!axis) axis = makeAxisNull(comp, talkMouths[0], "嘴軸");
+
+        var vals = [], infos = [];
+        for (var i = 0; i < talkMouths.length; i++) {
+            var m = talkMouths[i];
+            if (m === axis) continue;
+            var mv = layerSliderVal(m);
+            if (mv === null) { mv = nextSliderValue(comp, mouthName); opacityProp(m).expression = switchExpr(mouthName, mv); }
+            // 全部掛到共用嘴軸(指定 parent 時 AE 會保持外觀不跳動)
+            if (m.parent !== axis) m.parent = axis;
+            // 轉軸時美術反向補償,維持原本角度(跟 makeAxisNull 一致)
+            try {
+                m.property("ADBE Transform Group").property("ADBE Rotate Z").expression =
+                    "value - parent.transform.rotation // 軸轉、美術不轉";
+            } catch (eR) {}
+            vals.push(mv);
+            infos.push({ name: m.name, val: mv });
+        }
+        scaleProp(axis).expression = squashMouthExpr(mouthName, vals);
+        return infos;
+    }
+
     function blinkWindowLines(seed, minGap, maxGap, frames) {
         return [
             "var minGap = " + minGap + ", maxGap = " + maxGap + ";",
@@ -184,9 +254,11 @@
 
     function uniqueSeed() { return Math.floor(Math.random() * 900000) + 1000; }
 
-    // mouth 滑桿的「說話值」:有「張嘴 2」用 2,否則 1
+    // mouth 滑桿的「說話值」:取第一張說話嘴實際綁的值,沒有就回 1
     function talkValue(comp) {
-        return findLayer(comp, "張嘴 2") ? 2 : 1;
+        var t = findLayer(comp, "說話嘴");
+        if (t) { var v = layerSliderVal(t); if (v !== null) return v; }
+        return 1;
     }
 
     // 在圖層錨點位置建一個「軸」Null,把圖層 parent 上去。
@@ -208,12 +280,12 @@
         return axis;
     }
 
-    // 只有閉嘴圖的角色:自動生一張簡易張嘴(深色橢圓 Shape)
+    // 只有「嘴」(閉著)的角色:自動生一張簡易說話嘴(深色橢圓 Shape)
     function createOpenMouth(comp, closedLay) {
         var w = 60, h = 40;
         try { w = Math.max(closedLay.width * 0.8, 30); h = Math.max(closedLay.width * 0.55, 20); } catch (e) {}
         var shape = comp.layers.addShape();
-        shape.name = "張嘴";
+        shape.name = "說話嘴";
         var grp = shape.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
         grp.name = "mouth";
         var ell = grp.property("ADBE Vectors Group").addProperty("ADBE Vector Shape - Ellipse");
@@ -227,15 +299,15 @@
         return shape;
     }
 
-    // 只有張嘴圖的角色:在嘴軸中心生一條閉嘴線(#7E594C 圓角端點),
-    // 長度參考張嘴圖寬,讓你自己調 Bezier 弧度。
+    // 只有張嘴/說話嘴圖的角色:在嘴軸中心生一條閉嘴線(#7E594C 圓角端點),
+    // 長度參考嘴圖寬,讓你自己調 Bezier 弧度。
     function createClosedMouth(comp, openLay) {
         var lineW = 60;
         try { lineW = Math.max(openLay.width * 0.75, 30); } catch (e) {}
         var half = lineW / 2;
 
         var shape = comp.layers.addShape();
-        shape.name = "閉嘴";
+        shape.name = "嘴";
         var vectors = shape.property("ADBE Root Vectors Group");
         var grp = vectors.addProperty("ADBE Vector Group");
         grp.name = "closed_mouth";
@@ -265,17 +337,51 @@
 
     // ================= 1. 標記 =================
 
-    // 每個標記:基準名 / 滑桿 / 依序的滑桿值(第1個閉嘴=0、第2個=3…照你的慣例)
+    // 每個標記:基準名 / 滑桿 / 慣例起始值(base)。
+    // 同一個滑桿的值是一條連號序列:base 還沒被占用就用 base,已占用就接在目前最大值 +1。
+    //   嘴:每按一次「嘴」就新增一張嘴型,值連號 0、1、2、3…(0 可以是張嘴也可以是閉嘴,看你先標哪張)
+    //   說話嘴:選一張既有嘴型按下去 → 原嘴型編號不變,另複製一張「壓縮開合動態」嘴接在最大值後面
+    //   眼:0=睜眼、1=閉眼,之後累加(眼睛同理)
+    //   眉/特效:從 base 開始一路累加
     var TAGS = {
-        "閉眼": { slider: "eye",   vals: [1] },
-        "睜眼": { slider: "eye",   vals: [0] },
-        "閉嘴": { slider: "mouth", vals: [0, 3] },
-        "張嘴": { slider: "mouth", vals: [1, 2] },
-        "眉":   { slider: "眉",    vals: [0, 1, 2, 3] },
-        "汗":   { slider: "emo",   vals: [1, 2, 3] },
-        "耳":   { slider: null },
-        "鼻":   { slider: null }
+        "閉眼":   { slider: "eye",   base: 1 },
+        "睜眼":   { slider: "eye",   base: 0 },
+        "嘴":     { slider: "mouth", base: 0 },          // 嘴型(靜態),值連號 0、1、2…
+        "說話嘴": { slider: "mouth", talkCopy: true },   // 把選取的嘴複製成壓縮開合動態,接在最大值後
+        "眉":     { slider: "眉",    base: 0 },
+        "特效":   { slider: "emo",   base: 1 }, // 廣義表情特效:汗滴、怒氣、驚訝符號、愛心…都可掛在 emo 滑桿上
+        "耳":     { slider: null },
+        "鼻":     { slider: null }
     };
+
+    // 掃 comp,回傳某滑桿目前被哪些值占用(用於連號分配)。
+    function usedSliderValues(comp, sliderName) {
+        var used = {};
+        for (var i = 1; i <= comp.numLayers; i++) {
+            try {
+                var op = opacityProp(comp.layer(i));
+                if (!op.expressionEnabled) continue;
+                var ex = op.expression;
+                if (ex.indexOf('effect("' + sliderName + '")') === -1) continue;
+                var m = ex.match(new RegExp("==\\s*(\\d+)"));
+                if (m) used[parseInt(m[1], 10)] = true;
+            } catch (e) {}
+        }
+        return used;
+    }
+
+    // 給某滑桿分配下一個值:base 沒被占用就用 base,否則接在目前最大值 +1。
+    function allocSliderValue(comp, sliderName, base) {
+        var used = usedSliderValues(comp, sliderName);
+        if (!used[base]) return base;
+        var mx = -1;
+        for (var k in used) {
+            if (!used.hasOwnProperty(k)) continue;
+            var n = parseInt(k, 10);
+            if (n > mx) mx = n;
+        }
+        return mx + 1;
+    }
 
     function ensureRigNulls(comp) {
         function ensureNull(name) {
@@ -297,20 +403,49 @@
         var sel = comp.selectedLayers;
         if (sel.length === 0) { alert("先在時間軸選取要標記的圖層,再按「" + base + "」。"); return; }
 
+        var tag = TAGS[base];
+
         app.beginUndoGroup("標記 " + base);
         try {
             ensureControl(comp);
+
+            // 「說話嘴」:不改原嘴型,而是把選取的嘴複製成壓縮開合動態,值接在最大值之後
+            if (tag.talkCopy) {
+                var mouthName = sliderNameFor(comp, "mouth");
+                var made = 0;
+                for (var t = 0; t < sel.length; t++) {
+                    var src = sel[t];
+                    var dup = src.duplicate();
+                    var dupIdx = countByBase(comp, "說話嘴");
+                    dup.name = (dupIdx === 0) ? "說話嘴" : "說話嘴 " + (dupIdx + 1);
+                    var tv = nextSliderValue(comp, mouthName); // 接在目前最大值之後
+                    opacityProp(dup).expression = switchExpr(mouthName, tv);
+                    try { dup.moveBefore(src); } catch (eMv) {}
+                    made++;
+                }
+                // 所有說話嘴共用同一個「嘴軸」並重設開合表達式(不會冒出一堆嘴軸)
+                var infoArr = applyTalkSquash(comp, mouthName);
+                var lines = [];
+                for (var n = 0; n < infoArr.length; n++) lines.push("「" + infoArr[n].name + "」= " + infoArr[n].val);
+                alert("已新增 " + made + " 張說話嘴(壓縮開合動態),原嘴型不變。\n" +
+                      "目前所有說話嘴(共用一個「嘴軸」):\n  " + lines.join("\n  ") +
+                      "\n\n演出時把 " + mouthName +
+                      " 滑桿切到對應值就會說話開合;切到原本的嘴型值則是靜態嘴。");
+                return;
+            }
+
             var nulls = fullRig ? ensureRigNulls(comp) : null;
-            var tag = TAGS[base];
 
             for (var i = 0; i < sel.length; i++) {
                 var lay = sel[i];
-                var idx = countByBase(comp, base); // 已有幾個同名 → 決定編號與滑桿值
+                var idx = countByBase(comp, base); // 已有幾個同名 → 決定編號
                 lay.name = (idx === 0) ? base : base + " " + (idx + 1);
 
                 if (tag.slider) {
-                    var v = tag.vals[Math.min(idx, tag.vals.length - 1)];
-                    opacityProp(lay).expression = switchExpr(sliderNameFor(comp, tag.slider), v);
+                    // 同一滑桿值連號分配:base 沒被占用就用 base,否則接著最大值 +1,不會共用同值打架
+                    var sliderName = sliderNameFor(comp, tag.slider);
+                    var v = allocSliderValue(comp, sliderName, tag.base);
+                    opacityProp(lay).expression = switchExpr(sliderName, v);
                 }
                 if (nulls && !lay.parent) {
                     if (base === "耳") lay.parent = nulls.ear;
@@ -325,19 +460,13 @@
     // ---- 特殊表情(暈眼、X眼、哭嚎嘴…):掛到滑桿的下一個空值 ----
 
     function nextSliderValue(comp, sliderName) {
-        // 標準慣例已占用的最大值
-        var reserved = { eye: 1, mouth: 3, "眉": 3, emo: 3 };
-        var maxV = (reserved[sliderName] !== undefined) ? reserved[sliderName] : 0;
-        for (var i = 1; i <= comp.numLayers; i++) {
-            try {
-                var op = opacityProp(comp.layer(i));
-                if (!op.expressionEnabled) continue;
-                var ex = op.expression;
-                if (ex.indexOf('effect("' + sliderName + '")') === -1) continue;
-                // 注意:ExtendScript 不能寫 /==.../ 開頭的正則字面量,會被誤認成 /= 運算子
-                var m = ex.match(new RegExp("==\\s*(\\d+)"));
-                if (m && parseInt(m[1], 10) > maxV) maxV = parseInt(m[1], 10);
-            } catch (e) {}
+        // 特殊表情接在該滑桿目前最大值之後(純粹看實際用掉的值,連號往上)
+        var used = usedSliderValues(comp, sliderName);
+        var maxV = -1;
+        for (var k in used) {
+            if (!used.hasOwnProperty(k)) continue;
+            var n = parseInt(k, 10);
+            if (n > maxV) maxV = n;
         }
         return maxV + 1;
     }
@@ -496,78 +625,49 @@
         try {
             var ctrl = ensureControl(comp);
             var mouthName = sliderNameFor(comp, "mouth"); // 自動沿用 mouth 或 嘴
-            var open2 = findLayer(comp, "張嘴 2"), open1 = findLayer(comp, "張嘴"),
-                closed = findLayer(comp, "閉嘴");
+            // 收集所有「說話嘴」(可多組:開心說話、不開心說話…),各自有自己的滑桿值
+            var talkMouths = collectByBase(comp, "說話嘴");
+            var closed = findLayer(comp, "嘴");
+            var generated = false;
 
-            // 「靜嘴」勾選框:勾選時即使 mouth 滑桿在說話值,嘴巴也不會開合擠壓
-            // (給「靜止張嘴」用——嘴張開但不動)
-            var fx = ctrl.property("ADBE Effect Parade");
-            var cbStill = fx.property("靜嘴");
-            if (!cbStill) {
-                cbStill = fx.addProperty("ADBE Checkbox Control");
-                cbStill.name = "靜嘴";
-                cbStill.property(1).setValue(0);
+            // 沒有說話嘴時的自動生成(維持舊有便利:只有閉嘴 → 生一張說話嘴)
+            if (talkMouths.length === 0) {
+                if (closed) {
+                    var t = createOpenMouth(comp, closed);
+                    opacityProp(t).expression = switchExpr(mouthName, talkValue(comp));
+                    opacityProp(closed).expression = switchExpr(mouthName, 0);
+                    talkMouths.push(t);
+                    generated = true;
+                } else {
+                    alert("找不到「說話嘴」或「嘴」圖層,請先在「標記」頁標記嘴巴圖層。");
+                    return;
+                }
             }
-
-            function squashExpr(activeVal) {
-                return [
-                    "// === 說話擠壓(" + mouthName + " 滑桿 == " + activeVal + " 時啟動) ===",
-                    's = thisComp.layer("control").effect("' + mouthName + '")("Slider");',
-                    "var still = false;",
-                    'try { still = thisComp.layer("control").effect("靜嘴")("Checkbox") == 1; } catch (e) {}',
-                    "var speed = 9, amp = 45; // 開合速度 / 幅度(%)",
-                    "if (s == " + activeVal + " && !still) {",
-                    "  var k = 1 - (amp / 100) * Math.abs(Math.sin(time * speed));",
-                    "  // 相容 2D Null(嘴軸)與 3D 圖層",
-                    "  value.length > 2 ? [value[0], value[1] * k, value[2]] : [value[0], value[1] * k];",
-                    "} else { value; }"
-                ].join("\n");
-            }
-
-            var target = open2 || open1;
-            var v, generated = false;
-
-            if (!target && closed) {
-                // 只有閉嘴圖:自動生一張簡易張嘴,之後走標準閉/張切換
-                target = createOpenMouth(comp, closed);
-                opacityProp(target).expression = switchExpr(mouthName, 1);
+            // 有說話嘴但沒有閉嘴 → 自動生一條閉嘴線
+            if (!closed) {
+                closed = createClosedMouth(comp, talkMouths[0]);
                 opacityProp(closed).expression = switchExpr(mouthName, 0);
-                v = 1;
-                generated = true;
-            } else if (target && !closed) {
-                // 只有張嘴圖:自動生一條閉嘴線(#7E594C 圓角),走標準閉/張切換
-                closed = createClosedMouth(comp, target);
-                opacityProp(closed).expression = switchExpr(mouthName, 0);
-                opacityProp(target).expression = switchExpr(mouthName, open2 ? 2 : 1);
-                v = open2 ? 2 : 1;
-                generated = "open_only";
-            } else if (target) {
-                v = open2 ? 2 : 1;
-            } else {
-                alert("找不到「張嘴」或「閉嘴」圖層,請先在「標記」頁標記嘴巴圖層。");
-                return;
+                generated = generated || "open_only";
             }
 
-            // 擠壓掛在「嘴軸」Null 上,斜的嘴不會歪
-            var axis = makeAxisNull(comp, target, "嘴軸");
-            scaleProp(axis).expression = squashExpr(v);
+            // 所有說話嘴共用一個「嘴軸」,擠壓表達式對任何說話值都生效
+            var infoArr = applyTalkSquash(comp, mouthName);
+            var infos = [];
+            for (var i = 0; i < infoArr.length; i++) infos.push("「" + infoArr[i].name + "」= " + infoArr[i].val);
 
-            var msg = "說話設定完成:" + mouthName + " 滑桿 = " + v + " 時「" + target.name + "」會自動開合,= 0 是閉嘴。\n" +
-                      "用下面的「開始/停止說話」按鈕打 key 即可。\n\n" +
-                      "嘴如果是斜的:把「嘴軸」的 Rotation 轉到跟嘴同角度,\n" +
+            var msg = "說話設定完成,已對 " + infos.length + " 張說話嘴套上開合擠壓(共用同一個「嘴軸」):\n  " +
+                      infos.join("\n  ") + "\n" +
+                      "用下面的「開始/停止說話」按鈕打 key,或在 control 的 " + mouthName +
+                      " 滑桿自己切換要用哪張嘴。\n\n" +
+                      "嘴如果是斜的:把「嘴軸」Rotation 轉到跟嘴同角度,\n" +
                       "美術不會跟著轉,開合就會沿嘴的方向、不會歪。\n\n" +
-                      "【靜止張嘴】control 上多了「靜嘴」勾選框:\n" +
-                      "勾選後,即使 " + mouthName + " 在說話值,嘴巴也只張開不開合,\n" +
-                      "適合角色靜止張嘴(如唱歌長音)的演出。";
+                      "想要嘴張開但不動(如唱歌長音),把滑桿 key 到原本的靜態嘴型值即可。";
             if (generated === true) {
-                msg += "\n\n此角色原本只有閉嘴圖,我生了一個深色橢圓 Shape 當「張嘴」,\n" +
+                msg += "\n\n此角色原本只有「嘴」(閉著),我生了一個深色橢圓 Shape 當「說話嘴」,\n" +
                        "請花十秒調一下它的大小和顏色,讓它貼合畫風。";
             } else if (generated === "open_only") {
-                msg += "\n\n此角色只有張嘴圖,我已自動生成一條「閉嘴」線段(#7E594C 圓角)。\n" +
-                       "位置在嘴軸中心,你可以:\n" +
-                       "  1. 選取「閉嘴」圖層 → 用鋼筆工具拉 Bezier 弧度調成你要的曲線\n" +
-                       "  2. 調整 Stroke 寬度/顏色讓它配合角色畫風\n" +
-                       "滑桿 = 0 → 顯示閉嘴線 / 滑桿 = " + v + " → 顯示張嘴圖,正常切換。";
+                msg += "\n\n此角色原本沒有閉嘴,我已自動生成一條「嘴」線段(#7E594C 圓角)。\n" +
+                       "位置在嘴軸中心,你可以用鋼筆工具拉 Bezier 弧度、調 Stroke 配合畫風。";
             }
             alert(msg);
         } finally { app.endUndoGroup(); }
@@ -629,24 +729,6 @@
             }
         } finally { app.endUndoGroup(); }
         showStatus("已套擺動到 " + sel.length + " 個圖層(Rotation ±3°)。建議先建控制NULL再套,避免跟其他旋轉表達式衝突。");
-    }
-
-    // ================= 3. 演出:說話 key =================
-
-    function setMouthKey(talking) {
-        var comp = activeComp(); if (!comp) return;
-        app.beginUndoGroup(talking ? "開始說話" : "停止說話");
-        try {
-            var ctrl = ensureControl(comp);
-            var mouthName = sliderNameFor(comp, "mouth"); // 自動沿用 mouth 或 嘴
-            var slider = ctrl.property("ADBE Effect Parade").property(mouthName).property(1);
-            var v = talking ? talkValue(comp) : 0;
-            slider.setValueAtTime(comp.time, v);
-            // 滑桿切換一定要 HOLD,不然中間值會讓所有嘴都消失
-            var k = slider.nearestKeyIndex(comp.time);
-            slider.setInterpolationTypeAtKey(k,
-                KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
-        } finally { app.endUndoGroup(); }
     }
 
     // ================= 4. 表達式工具 =================
@@ -726,23 +808,17 @@
         { zh:"腰帶",  en:"belt",      cat:"身體" },
         { zh:"屁股",  en:"hip",       cat:"身體" },
 
-        { zh:"手臂左", en:"arm_L",     cat:"手臂" },
+        // 手臂只分上下臂(各左右),整隻沒拆的就命名為「上臂」
         { zh:"上臂左", en:"arm_up_L",  cat:"手臂" },
         { zh:"下臂左", en:"arm_low_L", cat:"手臂" },
-        { zh:"手左",  en:"hand_L",    cat:"手臂" },
-        { zh:"手臂右", en:"arm_R",     cat:"手臂" },
         { zh:"上臂右", en:"arm_up_R",  cat:"手臂" },
         { zh:"下臂右", en:"arm_low_R", cat:"手臂" },
-        { zh:"手右",  en:"hand_R",    cat:"手臂" },
 
-        { zh:"腿左",  en:"leg_L",     cat:"腿腳" },
+        // 腿只分大小腿(各左右),整隻沒拆的就命名為「大腿」
         { zh:"大腿左", en:"leg_up_L",  cat:"腿腳" },
         { zh:"小腿左", en:"leg_low_L", cat:"腿腳" },
-        { zh:"腳左",  en:"foot_L",    cat:"腿腳" },
-        { zh:"腿右",  en:"leg_R",     cat:"腿腳" },
         { zh:"大腿右", en:"leg_up_R",  cat:"腿腳" },
         { zh:"小腿右", en:"leg_low_R", cat:"腿腳" },
-        { zh:"腳右",  en:"foot_R",    cat:"腿腳" },
 
         { zh:"頭髮",  en:"hair",      cat:"配件" },
         { zh:"帽子",  en:"hat",       cat:"配件" },
@@ -752,24 +828,25 @@
         { zh:"光",    en:"light",     cat:"配件" }
     ];
 
-    // 反向語序別名（左手/右手/左腿/右腿…）：只用於中英轉換比對，不出現在命名按鈕上
+    // 反向語序別名(左上臂/左大腿…)：只用於中英轉換比對，不出現在命名按鈕上。
+    // 整隻沒拆的手臂/腿一律當「上臂 / 大腿」(對應骨架的 arm_up / leg_up)。
     var NAME_ALIASES = [
-        { zh:"左手臂", en:"arm_L" },
-        { zh:"右手臂", en:"arm_R" },
+        { zh:"左手臂", en:"arm_up_L" },  // 整隻手臂 = 上臂
+        { zh:"右手臂", en:"arm_up_R" },
+        { zh:"手臂左", en:"arm_up_L" },
+        { zh:"手臂右", en:"arm_up_R" },
         { zh:"左上臂", en:"arm_up_L" },
         { zh:"右上臂", en:"arm_up_R" },
         { zh:"左下臂", en:"arm_low_L" },
         { zh:"右下臂", en:"arm_low_R" },
-        { zh:"左手",  en:"hand_L" },
-        { zh:"右手",  en:"hand_R" },
-        { zh:"左腿",  en:"leg_L" },
-        { zh:"右腿",  en:"leg_R" },
+        { zh:"左腿",  en:"leg_up_L" },   // 整隻腿 = 大腿
+        { zh:"右腿",  en:"leg_up_R" },
+        { zh:"腿左",  en:"leg_up_L" },
+        { zh:"腿右",  en:"leg_up_R" },
         { zh:"左大腿", en:"leg_up_L" },
         { zh:"右大腿", en:"leg_up_R" },
         { zh:"左小腿", en:"leg_low_L" },
-        { zh:"右小腿", en:"leg_low_R" },
-        { zh:"左腳",  en:"foot_L" },
-        { zh:"右腳",  en:"foot_R" }
+        { zh:"右小腿", en:"leg_low_R" }
     ];
 
     // 使用者自訂對照（存 AE 偏好設定）
@@ -1272,19 +1349,15 @@
                 { child: "leg_up_L",  parent: BODY_NULL_NAME },
                 { child: "leg_up_R",  parent: BODY_NULL_NAME },
                 { child: "leg_low_L", parent: "leg_up_L" },
-                { child: "leg_low_R", parent: "leg_up_R" },
-                // 後援：手臂/腿沒有分上下段(只有一段)時,直接掛身體/全身NULL
-                // 必須放在分段規則之後 ── 已綁過的會因為已有 parent 而跳過
-                { child: "arm_L", parent: "body" },
-                { child: "arm_R", parent: "body" },
-                { child: "leg_L", parent: BODY_NULL_NAME },
-                { child: "leg_R", parent: BODY_NULL_NAME }
+                { child: "leg_low_R", parent: "leg_up_R" }
+                // 整隻沒拆的手臂/腿一律命名為上臂(arm_up)/大腿(leg_up),
+                // 直接套用上面的 arm_up→body、leg_up→全身NULL 規則,不需另設後援。
             ]
         }
     };
 
-    // 使用者自訂「骨架別名」：把圖層名稱前綴對應到骨架規則的 key(如 arm_L)。
-    // 解決命名跟規則對不上的問題(例如圖層叫「左手臂」而規則找的是 arm_L)。
+    // 使用者自訂「骨架別名」：把圖層名稱前綴對應到骨架規則的 key(如 arm_up_L)。
+    // 解決命名跟規則對不上的問題(例如圖層叫「左手臂」而規則找的是 arm_up_L)。
     var BONE_ALIAS_SEC = "CharacterPanel_BoneAlias";
 
     function boneAliasLoad() {
@@ -1521,13 +1594,13 @@
         var p1 = makeTab("標記");
         p1.add("statictext", undefined, "先選圖層再按按鈕:  [v2.0]");
         var rowA = p1.add("group"); var rowB = p1.add("group");
-        var tagOrder = ["閉眼", "睜眼", "閉嘴", "張嘴", "眉", "汗", "耳", "鼻"];
+        var tagOrder = ["閉眼", "睜眼", "嘴", "說話嘴", "眉", "特效", "耳", "鼻"];
         var fullRigCheck;
         for (var i = 0; i < tagOrder.length; i++) {
             var row = (i < 4) ? rowA : rowB;
             (function (base) {
                 var b = row.add("button", undefined, base);
-                b.preferredSize.width = 52;
+                b.preferredSize.width = (base.length > 2) ? 64 : 52;
                 b.onClick = function () { doTag(base, fullRigCheck.value); };
             })(tagOrder[i]);
         }
@@ -1535,19 +1608,10 @@
         bSpec.preferredSize.width = 52;
         bSpec.onClick = doSpecialTag;
 
-        var rowCtl = p1.add("group");
-        var bNum = rowCtl.add("button", undefined, "編號狀態…");
+        var rowNum = p1.add("group");
+        var bNum = rowNum.add("button", undefined, "編號狀態…");
         bNum.preferredSize.width = 86;
         bNum.onClick = doNumberedTag;
-        var bCtl = rowCtl.add("button", undefined, "建 control(含常用滑桿)");
-        bCtl.preferredSize.width = 160;
-        bCtl.onClick = function () {
-            var comp = activeComp(); if (!comp) return;
-            app.beginUndoGroup("建 control");
-            try { ensureControl(comp); } finally { app.endUndoGroup(); }
-            alert("control 已就緒:eye / mouth / 眉 / emo 滑桿 + face position 點控制。\n" +
-                  "(已存在的話只補缺少的滑桿,不會動到既有 key)");
-        };
         fullRigCheck = p1.add("checkbox", undefined, "完整綁定(建 face/eye/mouth/ear Null 並 parent)");
         fullRigCheck.value = false;
 
@@ -1673,8 +1737,33 @@
         bToEn.onClick = function () { convScope("toEn"); };
         bToZh.onClick = function () { convScope("toZh"); };
 
-        // ====== 綁定分頁（控制 NULL / 骨架 / 錨點 / 裁切）======
+        // ── Comp 裁切（標籤 + 兩步驟按鈕同列）──────────────────
+        var rowCrop = p5.add("group");
+        var labCrop = rowCrop.add("statictext", undefined, "裁切:"); labCrop.preferredSize.width = 70;
+        var bSoloRoi = rowCrop.add("button", undefined, "①solo+框"); bSoloRoi.preferredSize.width = 90;
+        var bDoCrop  = rowCrop.add("button", undefined, "②裁切還原"); bDoCrop.preferredSize.width = 90;
+        bSoloRoi.onClick = doSoloAndROI;
+        bDoCrop.onClick  = doCropToROI;
+        var rowCrop2 = p5.add("group");
+        var labCrop2 = rowCrop2.add("statictext", undefined, ""); labCrop2.preferredSize.width = 70;
+        var bTrim = rowCrop2.add("button", undefined, "或：自動縮到有圖範圍"); bTrim.preferredSize.width = 180;
+        bTrim.onClick = doTrimToContent;
+
+        // ====== 綁定分頁（控制 NULL / 骨架 / 錨點）======
         var p6 = makeTab("綁定");
+
+        // ── 建立角色 control（含常用滑桿）──────────────────────
+        var rowCtl = p6.add("group");
+        var labCtl = rowCtl.add("statictext", undefined, "Control:"); labCtl.preferredSize.width = 70;
+        var bCtl = rowCtl.add("button", undefined, "建 control(含常用滑桿)");
+        bCtl.preferredSize.width = 160;
+        bCtl.onClick = function () {
+            var comp = activeComp(); if (!comp) return;
+            app.beginUndoGroup("建 control");
+            try { ensureControl(comp); } finally { app.endUndoGroup(); }
+            alert("control 已就緒:eye / mouth / 眉 / emo 滑桿 + face position 點控制。\n" +
+                  "(已存在的話只補缺少的滑桿,不會動到既有 key)");
+        };
 
         // ── 控制 NULL（標籤 + 兩按鈕同列）─────────────────────
         var rowNu = p6.add("group");
@@ -1699,9 +1788,9 @@
                   "  小腿(leg_low)→ 大腿\n" +
                   "  上臂(arm_up) → 身體\n" +
                   "  下臂(arm_low)→ 上臂\n" +
-                  "  單段手臂(arm_L/arm_R) → 身體(沒分上下臂時)\n" +
-                  "  單段腿(leg_L/leg_R)   → 全身NULL(沒分大小腿時)\n" +
                   "  頭(head)     → 身體\n\n" +
+                  "整隻沒拆的手臂/腿,命名為「上臂(arm_up)/大腿(leg_up)」即可,\n" +
+                  "會直接套用上面的規則,不必特別處理。\n" +
                   "沒有屁股圖層時,身體會直接掛全身NULL。\n" +
                   "先在命名頁把名稱轉成英文,再按此按鈕效果最佳。\n" +
                   "已有 parent 的圖層不會被覆蓋。\n\n" +
@@ -1721,9 +1810,9 @@
             var key = prompt(
                 "對應到哪個骨架規則 key?\n" +
                 "常用:body / hip / head /\n" +
-                "arm_up_L / arm_up_R / arm_low_L / arm_low_R / arm_L / arm_R /\n" +
-                "leg_up_L / leg_up_R / leg_low_L / leg_low_R / leg_L / leg_R",
-                "arm_L");
+                "arm_up_L / arm_up_R / arm_low_L / arm_low_R /\n" +
+                "leg_up_L / leg_up_R / leg_low_L / leg_low_R",
+                "arm_up_L");
             if (!key) return;
             var items = boneAliasLoad();
             items.push({ pattern: pattern, key: key });
@@ -1749,18 +1838,6 @@
             for (var i = 0; i < items.length; i++) lines.push(items[i].pattern + " → " + items[i].key);
             alert("目前的綁定別名:\n" + lines.join("\n"));
         };
-
-        // ── Comp 裁切（標籤 + 兩步驟按鈕同列）──────────────────
-        var rowCrop = p6.add("group");
-        var labCrop = rowCrop.add("statictext", undefined, "裁切:"); labCrop.preferredSize.width = 70;
-        var bSoloRoi = rowCrop.add("button", undefined, "①solo+框"); bSoloRoi.preferredSize.width = 90;
-        var bDoCrop  = rowCrop.add("button", undefined, "②裁切還原"); bDoCrop.preferredSize.width = 90;
-        bSoloRoi.onClick = doSoloAndROI;
-        bDoCrop.onClick  = doCropToROI;
-        var rowCrop2 = p6.add("group");
-        var labCrop2 = rowCrop2.add("statictext", undefined, ""); labCrop2.preferredSize.width = 70;
-        var bTrim = rowCrop2.add("button", undefined, "或：自動縮到有圖範圍"); bTrim.preferredSize.width = 180;
-        bTrim.onClick = doTrimToContent;
 
         // --- 動態(自動微動,跑整部影片不用人工) ---
         var p2 = makeTab("動態(自動)");
@@ -1813,13 +1890,71 @@
         refreshRigComps();
         bScan.onClick = refreshRigComps;
 
+        // ── 鎖定角色:可直接鎖「目前選取的角色圖層」(在外層合成裡的頭/角色 precomp),
+        // 之後下 key 會自動換算成該角色內部的時間,不用切進頭合成。
+        // 若該角色合成本身就有 control(沒有額外的頭/角色 comp),也可直接鎖目前合成。
+        var lockedTarget = null; // { comp, layer } ; layer 為 null 表示直接鎖目前合成本身
+        var rowLock = p3.add("group");
+        var bLock = rowLock.add("button", undefined, "鎖定選取角色圖層"); bLock.preferredSize.width = 140;
+        var bUnlock = rowLock.add("button", undefined, "解除鎖定"); bUnlock.preferredSize.width = 80;
+        var lockLabel = rowLock.add("statictext", undefined, "(未鎖定,使用上面下拉選的角色)");
+        lockLabel.preferredSize.width = 260;
+        bLock.onClick = function () {
+            var c = app.project.activeItem;
+            if (!(c instanceof CompItem)) { alert("先點開外層合成,選取角色圖層再按此按鈕。"); return; }
+            var sel = c.selectedLayers;
+            if (sel.length > 0 && sel[0].source instanceof CompItem && findLayer(sel[0].source, "control")) {
+                lockedTarget = { comp: sel[0].source, layer: sel[0] };
+                lockLabel.text = "已鎖定:「" + sel[0].name + "」(內部合成:" + sel[0].source.name + ")";
+                return;
+            }
+            if (findLayer(c, "control")) {
+                lockedTarget = { comp: c, layer: null };
+                lockLabel.text = "已鎖定:目前合成「" + c.name + "」本身(無頭層結構)";
+                return;
+            }
+            alert("找不到可鎖定的角色。\n" +
+                  "請選取一個「來源合成內含 control」的角色圖層,\n" +
+                  "或直接打開角色本身就有 control 的合成(無頭層結構)。");
+        };
+        bUnlock.onClick = function () {
+            lockedTarget = null;
+            lockLabel.text = "(未鎖定,使用上面下拉選的角色)";
+        };
+
+        // 鎖定的圖層可能被使用者刪掉/換掉,存取前先確認還活著。失效就自動解鎖。
+        function lockedLayerAlive() {
+            if (!(lockedTarget && lockedTarget.layer)) return false;
+            try {
+                var _ = lockedTarget.layer.containingComp; // 已刪除的圖層存取會丟錯
+                return true;
+            } catch (e) {
+                lockedTarget = null;
+                lockLabel.text = "(鎖定的圖層已失效,已自動解鎖)";
+                return false;
+            }
+        }
+
         function targetComp() {
-            if (!charDrop.selection) { alert("先按 ↻ 掃描專案,再從下拉選角色(有 control 的合成)。"); return null; }
+            if (lockedTarget) {
+                if (lockedTarget.layer && !lockedLayerAlive()) {
+                    // 圖層失效後 lockedTarget 已被清空,落回下拉選單
+                } else {
+                    return lockedTarget.comp;
+                }
+            }
+            if (!charDrop.selection) { alert("先按 ↻ 掃描專案,再從下拉選角色(有 control 的合成),\n或用「鎖定選取角色圖層」。"); return null; }
             return rigComps[charDrop.selection.index];
         }
 
         // 用「目前開著的合成」的時間下 key(你們所有合成都是同一條全片時間軸)
+        // 若鎖定的是外層合成裡的角色層,換算成該角色內部合成的時間。
         function nowTime(tc) {
+            if (lockedLayerAlive()) {
+                var layer = lockedTarget.layer;
+                var outer = layer.containingComp;
+                return (outer.time - layer.startTime) * 100 / layer.stretch;
+            }
             var a = app.project.activeItem;
             return (a instanceof CompItem) ? a.time : tc.time;
         }
@@ -1894,6 +2029,71 @@
             alert(lines.length === 0
                 ? "「" + sliderName + "」滑桿目前沒有任何圖層的不透明度跟它連動。"
                 : "「" + sliderName + "」滑桿的值對應(填到上面「值」欄):\n" + lines.join("\n"));
+        };
+
+        // ── 演出快捷鍵(需先「鎖定選取角色圖層」)──────────────
+        p3.add("statictext", undefined, "演出快捷鍵(嚇一跳/翻轉/閃爍,要先鎖定角色圖層):");
+        var rowShort = p3.add("group");
+        var bShock = rowShort.add("button", undefined, "嚇一跳"); bShock.preferredSize.width = 70;
+        var bFlip  = rowShort.add("button", undefined, "左右翻轉"); bFlip.preferredSize.width = 70;
+        var bFlash = rowShort.add("button", undefined, "閃爍"); bFlash.preferredSize.width = 70;
+
+        function needLockedLayer() {
+            if (lockedLayerAlive()) return lockedTarget.layer;
+            alert("這個快捷鍵需要先在外層合成選取角色圖層,\n再按上面的「鎖定選取角色圖層」。");
+            return null;
+        }
+
+        bShock.onClick = function () {
+            var layer = needLockedLayer(); if (!layer) return;
+            app.beginUndoGroup("演出:嚇一跳");
+            try {
+                var scale = layer.property("ADBE Transform Group").property("ADBE Scale");
+                var outer = layer.containingComp;
+                var t = outer.time;
+                var base = scale.valueAtTime(t, false);
+                var big = [base[0] * 1.2, base[1] * 1.2];
+                scale.setValueAtTime(t, base);
+                scale.setValueAtTime(t + 0.08, big);
+                scale.setValueAtTime(t + 0.20, base);
+            } finally { app.endUndoGroup(); }
+            showStatus("已加入「嚇一跳」縮放動畫(目前時間附近)。");
+        };
+
+        bFlip.onClick = function () {
+            var layer = needLockedLayer(); if (!layer) return;
+            app.beginUndoGroup("演出:左右翻轉");
+            try {
+                var scale = layer.property("ADBE Transform Group").property("ADBE Scale");
+                var outer = layer.containingComp;
+                var t = outer.time;
+                var base = scale.valueAtTime(t, false);
+                var flipped = [-base[0], base[1]];
+                if (base.length > 2) flipped.push(base[2]);
+                scale.setValueAtTime(t, flipped);
+                var k = scale.nearestKeyIndex(t);
+                scale.setInterpolationTypeAtKey(k, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+            } finally { app.endUndoGroup(); }
+            showStatus("已在目前時間下「左右翻轉」HOLD key(Scale X 正負互換)。");
+        };
+
+        bFlash.onClick = function () {
+            var layer = needLockedLayer(); if (!layer) return;
+            app.beginUndoGroup("演出:閃爍");
+            try {
+                var op = layer.property("ADBE Transform Group").property("ADBE Opacity");
+                var outer = layer.containingComp;
+                var t = outer.time;
+                var base = op.valueAtTime(t, false);
+                var seq = [base, 20, base, 20, base];
+                for (var i = 0; i < seq.length; i++) {
+                    var kt = t + i * 0.06;
+                    op.setValueAtTime(kt, seq[i]);
+                    var k = op.nearestKeyIndex(kt);
+                    op.setInterpolationTypeAtKey(k, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+                }
+            } finally { app.endUndoGroup(); }
+            showStatus("已加入「閃爍」不透明度 HOLD key 序列(目前時間附近)。");
         };
 
         // --- 表達式工具 ---
