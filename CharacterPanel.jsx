@@ -27,6 +27,62 @@
         alert(msg);
     }
 
+    // 拉桿輸入(取代 prompt):回傳整數,取消回傳 null
+    function promptSlider(title, label, value, min, max) {
+        var d = new Window("dialog", title);
+        d.orientation = "column";
+        d.alignChildren = ["fill", "top"];
+        var g = d.add("group");
+        g.add("statictext", undefined, label);
+        var valText = g.add("statictext", undefined, String(Math.round(value)));
+        valText.preferredSize.width = 36;
+        var sl = d.add("slider", undefined, value, min, max);
+        sl.preferredSize.width = 240;
+        sl.onChanging = function () { valText.text = String(Math.round(sl.value)); };
+        var btns = d.add("group");
+        btns.alignment = "right";
+        var ok = btns.add("button", undefined, "OK", { name: "ok" });
+        var cancel = btns.add("button", undefined, "取消", { name: "cancel" });
+        var result = null;
+        ok.onClick = function () { result = Math.round(sl.value); d.close(); };
+        cancel.onClick = function () { d.close(); };
+        d.show();
+        return result;
+    }
+
+    // 數字輸入 + / − 微調(取代 prompt):回傳數字,取消回傳 null
+    function promptStepper(title, label, value, step) {
+        var d = new Window("dialog", title);
+        d.orientation = "column";
+        d.alignChildren = ["fill", "top"];
+        d.add("statictext", undefined, label);
+        var g = d.add("group");
+        var minus = g.add("button", undefined, "−"); minus.preferredSize.width = 26;
+        var et = g.add("edittext", undefined, String(value)); et.preferredSize.width = 60;
+        var plus = g.add("button", undefined, "+"); plus.preferredSize.width = 26;
+        minus.onClick = function () {
+            var v = parseFloat(et.text); if (isNaN(v)) v = value;
+            et.text = String(Math.round((v - step) * 100) / 100);
+        };
+        plus.onClick = function () {
+            var v = parseFloat(et.text); if (isNaN(v)) v = value;
+            et.text = String(Math.round((v + step) * 100) / 100);
+        };
+        var btns = d.add("group");
+        btns.alignment = "right";
+        var ok = btns.add("button", undefined, "OK", { name: "ok" });
+        var cancel = btns.add("button", undefined, "取消", { name: "cancel" });
+        var result = null;
+        ok.onClick = function () {
+            var v = parseFloat(et.text);
+            if (!isNaN(v)) result = v;
+            d.close();
+        };
+        cancel.onClick = function () { d.close(); };
+        d.show();
+        return result;
+    }
+
     function activeComp() {
         var c = app.project.activeItem;
         if (!(c instanceof CompItem)) { alert("請先點一下要操作的合成時間軸。"); return null; }
@@ -1035,10 +1091,9 @@
         var comp = activeComp(); if (!comp) return;
         var sel = comp.selectedLayers;
         if (sel.length === 0) { alert("先選取有循環 key 的圖層(嘴、呼吸、Puppet 都可以)。"); return; }
-        var fIn = prompt("循環一趟要幾格?(第一個到最後一個 key 的距離)", "7");
-        if (fIn === null) return;
-        var frames = parseFloat(fIn);
-        if (isNaN(frames) || frames <= 0) { alert("要輸入正數。"); return; }
+        var frames = promptSlider("循環 key 節奏", "循環一趟要幾格?(第一個到最後一個 key 的距離)", 7, 1, 60);
+        if (frames === null) return;
+        if (frames <= 0) { alert("要輸入正數。"); return; }
         var newSpan = frames * comp.frameDuration;
 
         var count = 0;
@@ -1099,10 +1154,9 @@
         var comp = activeComp(); if (!comp) return;
         var sel = comp.selectedLayers;
         if (sel.length === 0) { alert("先選取掛了動態表達式的圖層。"); return; }
-        var mIn = prompt("倍速?(2 = 快兩倍,0.5 = 慢一半)", "1.5");
-        if (mIn === null) return;
-        var m = parseFloat(mIn);
-        if (isNaN(m) || m <= 0) { alert("要輸入正數。"); return; }
+        var m = promptStepper("表達式倍速", "倍速?(2 = 快兩倍,0.5 = 慢一半)", 1, 0.1);
+        if (m === null) return;
+        if (m <= 0) { alert("要輸入正數。"); return; }
 
         var count = 0;
         app.beginUndoGroup("表達式倍速");
@@ -1708,8 +1762,9 @@
         var bTrim = rowCrop2.add("button", undefined, "或：自動縮到有圖範圍"); bTrim.preferredSize.width = 180;
         bTrim.onClick = doTrimToContent;
 
-        // --- 動態 ---
-        var p2 = makeTab("動態");
+        // --- 動態(自動微動,跑整部影片不用人工) ---
+        var p2 = makeTab("動態(自動)");
+        p2.add("statictext", undefined, "套用後自動循環播放,不用打 key(眨眼/說話開合/呼吸/漂浮/擺動):");
         var rowC = p2.add("group"); var rowD = p2.add("group");
         var bBlink = rowC.add("button", undefined, "隨機眨眼");   bBlink.preferredSize.width = 110;
         var bTalk  = rowC.add("button", undefined, "說話設定");   bTalk.preferredSize.width = 110;
@@ -1729,8 +1784,8 @@
         bLoopT.onClick = retimeLoopKeys;
         bExprT.onClick = retimeExprSpeed;
 
-        // --- 演出(遠端 key:人待在主場景,key 寫進角色的 control) ---
-        var p3 = makeTab("演出");
+        // --- 演出(手動下 key:人待在主場景,key 寫進角色的 control) ---
+        var p3 = makeTab("演出(手動Key)");
 
         var rigComps = [];
         var rowChar = p3.add("group");
@@ -1792,6 +1847,30 @@
         bOn.onClick  = function () { var tc = targetComp(); if (!tc) return; remoteKey("mouth", talkValue(tc)); };
         bOff.onClick = function () { remoteKey("mouth", 0); };
 
+        // 掃這個角色的 control,列出某滑桿目前每個數值各對應哪個圖層(表情/狀態)
+        function describeSliderValues(comp, sliderName) {
+            var map = {};
+            for (var i = 1; i <= comp.numLayers; i++) {
+                try {
+                    var op = opacityProp(comp.layer(i));
+                    if (!op.expressionEnabled) continue;
+                    var ex = op.expression;
+                    if (ex.indexOf('effect("' + sliderName + '")') === -1) continue;
+                    var m = ex.match(new RegExp("==\\s*(\\d+)"));
+                    if (!m) continue;
+                    if (!map[m[1]]) map[m[1]] = [];
+                    map[m[1]].push(comp.layer(i).name);
+                } catch (e) {}
+            }
+            var keys = [];
+            for (var k in map) if (map.hasOwnProperty(k)) keys.push(k);
+            keys.sort(function (a, b) { return parseInt(a, 10) - parseInt(b, 10); });
+            var lines = [];
+            for (var j = 0; j < keys.length; j++) lines.push(keys[j] + " → " + map[keys[j]].join("、"));
+            return lines;
+        }
+
+        p3.add("statictext", undefined, "通用滑桿:選角色 + 滑桿 + 值,按「下 HOLD key」在目前時間切換表情/狀態。");
         var rowX = p3.add("group");
         rowX.add("statictext", undefined, "滑桿:");
         var SLD_ROLES = ["eye", "mouth", "眉", "emo"];
@@ -1805,6 +1884,16 @@
             var v = parseFloat(valBox.text);
             if (isNaN(v)) { alert("值要是數字。"); return; }
             remoteKey(SLD_ROLES[sldDrop.selection.index], v);
+        };
+        var bSldInfo = rowX.add("button", undefined, "查表"); bSldInfo.preferredSize.width = 50;
+        bSldInfo.onClick = function () {
+            var tc = targetComp(); if (!tc) return;
+            var role = SLD_ROLES[sldDrop.selection.index];
+            var sliderName = sliderNameFor(tc, role);
+            var lines = describeSliderValues(tc, sliderName);
+            alert(lines.length === 0
+                ? "「" + sliderName + "」滑桿目前沒有任何圖層的不透明度跟它連動。"
+                : "「" + sliderName + "」滑桿的值對應(填到上面「值」欄):\n" + lines.join("\n"));
         };
 
         // --- 表達式工具 ---
