@@ -446,31 +446,14 @@
                     try { dup.moveBefore(src); } catch (eMv) {}
                     made++;
                 }
-                // 沒有「嘴」(閉嘴)→ 自動生一條閉嘴線,避免說話嘴沒有對應的閉嘴狀態
-                var closedLay = findLayer(comp, "嘴");
-                var generatedClosed = false;
-                if (!closedLay) {
-                    var anyTalk = collectByBase(comp, "說話嘴")[0];
-                    closedLay = createClosedMouth(comp, anyTalk);
-                    closedLay.name = "嘴";
-                    var closedVal = allocSliderValue(comp, mouthName, 0);
-                    opacityProp(closedLay).expression = switchExpr(mouthName, closedVal);
-                    generatedClosed = true;
-                }
-
                 // 所有說話嘴共用同一個「嘴軸」並重設開合表達式(不會冒出一堆嘴軸)
                 var infoArr = applyTalkSquash(comp, mouthName);
                 var lines = [];
                 for (var n = 0; n < infoArr.length; n++) lines.push("「" + infoArr[n].name + "」= " + infoArr[n].val);
-                var msgTalk = "已新增 " + made + " 張說話嘴(壓縮開合動態),原嘴型不變。\n" +
+                alert("已新增 " + made + " 張說話嘴(壓縮開合動態),原嘴型不變。\n" +
                       "目前所有說話嘴(共用一個「嘴軸」):\n  " + lines.join("\n  ") +
                       "\n\n演出時把 " + mouthName +
-                      " 滑桿切到對應值就會說話開合;切到原本的嘴型值則是靜態嘴。";
-                if (generatedClosed) {
-                    msgTalk += "\n\n此角色原本沒有閉嘴,已自動生成一條「嘴」線段(#7E594C 圓角,值 = " + closedVal + ")。\n" +
-                               "位置在嘴軸中心,可用鋼筆工具拉 Bezier 弧度、調 Stroke 配合畫風。";
-                }
-                alert(msgTalk);
+                      " 滑桿切到對應值就會說話開合;切到原本的嘴型值則是靜態嘴。");
                 return;
             }
 
@@ -494,35 +477,109 @@
                     else if (tag.slider === "mouth") lay.parent = nulls.mouth;
                 }
             }
+        } finally { app.endUndoGroup(); }
+    }
 
-            // 第一次標記「眉」(value 0)、目前 comp 裡只有這一個眉 → 自動生 2 條佔位短線段(眉2、眉3),
-            // 當挑眉/怒眉等其他表情的起點,已綁好滑桿值,改完形狀/位置即可,不用手動改表達式。
-            // 之後要再加表情:複製其中一張眉,選取後再按一次「眉」按鈕,面板會自動接續編號與滑桿值。
-            if (base === "眉" && countByBase(comp, "眉") === 1) {
-                var browLay = findLayer(comp, "眉");
-                var browSliderName = sliderNameFor(comp, "眉");
-                for (var bIdx = 2; bIdx <= 3; bIdx++) {
-                    var ph = createPlaceholderLine(comp, browLay, "眉 " + bIdx, "brow_placeholder", 0.6);
-                    var phVal = allocSliderValue(comp, browSliderName, tag.base);
-                    opacityProp(ph).expression = switchExpr(browSliderName, phVal);
+    // ================= 生成五官(獨立按鈕,不再綁在「標記」的副作用) =================
+
+    // 補說話嘴:沒有「說話嘴」時,從現有「嘴」(或選取圖層)生一張深色橢圓並套開合動態
+    function doGenTalkMouth() {
+        var comp = activeComp(); if (!comp) return;
+        app.beginUndoGroup("生成說話嘴");
+        try {
+            ensureControl(comp);
+            var mouthName = sliderNameFor(comp, "mouth");
+            if (collectByBase(comp, "說話嘴").length > 0) {
+                alert("這個角色已經有「說話嘴」了。\n要再加一張請用「標記」的「說話嘴」按鈕複製現有嘴型。");
+                return;
+            }
+            var refLay = findLayer(comp, "嘴") ||
+                         (comp.selectedLayers.length ? comp.selectedLayers[0] : null);
+            if (!refLay) { alert("先標記一張「嘴」,或選取一張嘴圖層,再按「補說話嘴」。"); return; }
+            var openLay = createOpenMouth(comp, refLay);
+            openLay.name = "說話嘴";
+            opacityProp(openLay).expression = switchExpr(mouthName, nextSliderValue(comp, mouthName));
+            applyTalkSquash(comp, mouthName);
+            alert("已生成一張深色橢圓「說話嘴」並套上開合動態。\n請調整它的大小/顏色貼合畫風。");
+        } finally { app.endUndoGroup(); }
+    }
+
+    // 補閉嘴:沒有「嘴」(閉嘴)時,從現有「說話嘴」(或選取圖層)位置生一條閉嘴線段,綁滑桿值 0
+    function doGenClosedMouth() {
+        var comp = activeComp(); if (!comp) return;
+        app.beginUndoGroup("生成閉嘴");
+        try {
+            ensureControl(comp);
+            var mouthName = sliderNameFor(comp, "mouth");
+            if (findLayer(comp, "嘴")) { alert("這個角色已經有「嘴」(閉嘴)了。"); return; }
+            var refLay = collectByBase(comp, "說話嘴")[0] ||
+                         (comp.selectedLayers.length ? comp.selectedLayers[0] : null);
+            if (!refLay) { alert("先有一張「說話嘴」,或選取一張嘴圖層,再按「補閉嘴」。"); return; }
+            var closedLay = createClosedMouth(comp, refLay);
+            closedLay.name = "嘴";
+            opacityProp(closedLay).expression = switchExpr(mouthName, allocSliderValue(comp, mouthName, 0));
+            alert("已生成一條「嘴」(閉嘴)線段,綁在 " + mouthName + " 值 0。\n" +
+                  "可用鋼筆工具拉 Bezier 弧度、調 Stroke 配合畫風。");
+        } finally { app.endUndoGroup(); }
+    }
+
+    // 補眉:在現有「眉」(或選取圖層)位置生 2 條圓端短線段佔位(眉2、眉3),已綁滑桿連號值
+    function doGenBrows() {
+        var comp = activeComp(); if (!comp) return;
+        app.beginUndoGroup("生成眉毛佔位");
+        try {
+            ensureControl(comp);
+            var browSliderName = sliderNameFor(comp, "眉");
+            var refLay = findLayer(comp, "眉") ||
+                         (comp.selectedLayers.length ? comp.selectedLayers[0] : null);
+            if (!refLay) { alert("先標記一個「眉」,或選取一張眉圖層,再按「補眉」。"); return; }
+            var startIdx = countByBase(comp, "眉") + 1; // 接在現有眉之後編號
+            var made = [];
+            for (var k = 0; k < 2; k++) {
+                var nm = "眉 " + (startIdx + k);
+                var ph = createPlaceholderLine(comp, refLay, nm, "brow_placeholder", 0.6);
+                opacityProp(ph).expression = switchExpr(browSliderName, allocSliderValue(comp, browSliderName, 0));
+                made.push(nm);
+            }
+            alert("已生成 2 條圓端短線段佔位(" + made.join("、") + "),放在眉毛位置、綁好 " +
+                  browSliderName + " 滑桿連號值。\n" +
+                  "改形狀/位置當挑眉/怒眉等表情即可。\n\n" +
+                  "之後要再加表情:複製其中一張眉,選取後再按一次「補眉」(或「標記」的「眉」),\n" +
+                  "面板會自動接續編號與滑桿值,不用手動改表達式。");
+        } finally { app.endUndoGroup(); }
+    }
+
+    // 綁五官到 face null:五官沒放進頭部 comp 時,建一個「face」null 並把所有五官 parent 上去,
+    // face null 本身不指定 parent,你再自行依情況把它接到頭或身體。
+    function doBindFaceNull() {
+        var comp = activeComp(); if (!comp) return;
+        app.beginUndoGroup("綁五官到 face null");
+        try {
+            var faceN = findLayer(comp, "face");
+            if (!faceN) {
+                faceN = comp.layers.addNull(comp.duration);
+                faceN.name = "face";
+                faceN.moveToBeginning();
+            }
+            // 五官家族:標記用的中文名(含特殊表情接在後面的圖層也多半是這些族群)
+            var bases = ["閉眼", "睜眼", "眼", "嘴", "說話嘴", "眉", "特效", "耳", "鼻",
+                         "眼軸", "嘴軸"];
+            var linked = 0, skipped = 0;
+            for (var b = 0; b < bases.length; b++) {
+                var fam = collectByBase(comp, bases[b]);
+                for (var i = 0; i < fam.length; i++) {
+                    if (fam[i] === faceN) continue;
+                    if (fam[i].parent === faceN) continue;
+                    // 已 parent 到別的東西(例如眼/嘴掛在軸上)就不搶,只接「軸」與沒 parent 的五官
+                    if (fam[i].parent && bases[b] !== "眼軸" && bases[b] !== "嘴軸") { skipped++; continue; }
+                    fam[i].parent = faceN;
+                    linked++;
                 }
-                alert("已在「眉」位置生成 2 條佔位短線段(眉 2、眉 3),已綁好 " + browSliderName + " 滑桿值。\n" +
-                      "拿來當挑眉/怒眉等其他表情的起點,改形狀/位置貼合畫風即可。\n\n" +
-                      "之後要再加表情:複製其中一張眉,選取後再按一次「眉」按鈕,\n" +
-                      "面板會自動接續編號(眉 4…)與滑桿值,不用手動改表達式。");
             }
-
-            // 第一次標記「嘴」(閉嘴 value 0)、還沒有「說話嘴」→ 自動生一張說話嘴並套上開合動態
-            if (base === "嘴" && collectByBase(comp, "說話嘴").length === 0) {
-                var baseMouth = findLayer(comp, "嘴");
-                var mouthNameG = sliderNameFor(comp, "mouth");
-                var openLay = createOpenMouth(comp, baseMouth);
-                opacityProp(openLay).expression = switchExpr(mouthNameG, nextSliderValue(comp, mouthNameG));
-                openLay.name = "說話嘴";
-                applyTalkSquash(comp, mouthNameG);
-                alert("目前沒有「說話嘴」,已自動生成一張深色橢圓當說話嘴並套上開合動態。\n" +
-                      "請花十秒調整「說話嘴」圖層的大小/顏色,讓它貼合畫風。");
-            }
+            alert("已建/沿用「face」null,把 " + linked + " 個五官圖層掛上去" +
+                  (skipped ? "(" + skipped + " 個已掛在軸或其他父層,保留不動)" : "") + "。\n\n" +
+                  "「face」目前沒有父層 —— 請自行把它的 parent 設成頭(head)或身體(body),\n" +
+                  "看這個角色的五官要跟著頭轉還是跟著身體動。");
         } finally { app.endUndoGroup(); }
     }
 
@@ -1829,6 +1886,20 @@
         bNum.onClick = doNumberedTag;
         fullRigCheck = p1.add("checkbox", undefined, "完整綁定(建 face/eye/mouth/ear Null 並 parent)");
         fullRigCheck.value = false;
+
+        // ── 生成五官(獨立按鈕,只在你按下時才生成,標記按鈕不再有生成副作用)──
+        p1.add("statictext", undefined, "生成五官(缺哪個補哪個,標記不會自動生成):");
+        var rowGen = p1.add("group");
+        var bGenTalk = rowGen.add("button", undefined, "補說話嘴"); bGenTalk.preferredSize.width = 72;
+        var bGenClose = rowGen.add("button", undefined, "補閉嘴");  bGenClose.preferredSize.width = 64;
+        var bGenBrow = rowGen.add("button", undefined, "補眉");     bGenBrow.preferredSize.width = 56;
+        bGenTalk.onClick = doGenTalkMouth;
+        bGenClose.onClick = doGenClosedMouth;
+        bGenBrow.onClick = doGenBrows;
+        var rowFace = p1.add("group");
+        var bFaceNull = rowFace.add("button", undefined, "綁五官到 face null"); bFaceNull.preferredSize.width = 130;
+        bFaceNull.onClick = doBindFaceNull;
+        rowFace.add("statictext", undefined, "← 五官沒在頭部comp時用,之後自己把 face 接到頭或身體");
 
         var rowFocus = p1.add("group");
         var bFocus = rowFocus.add("button", undefined, "軸心聚焦(選中100%,其他25%)");
