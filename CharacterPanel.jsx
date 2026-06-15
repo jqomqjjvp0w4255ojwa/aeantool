@@ -99,6 +99,22 @@
         return null;
     }
 
+    // 從 comp 往內找到「含 control 的合成」,回傳 { comp, chain }。
+    // chain 是從 comp 往內、一路到含 control 那層之間的圖層串(外→內),用來換算時間。
+    // 角色結構常是:外層 → 角色precomp → 頭precomp(含 control),control 不在最外層,要往內挖。
+    function findControlChain(comp, depthLimit) {
+        if (findLayer(comp, "control")) return { comp: comp, chain: [] };
+        if (depthLimit <= 0) return null;
+        for (var i = 1; i <= comp.numLayers; i++) {
+            var L = comp.layer(i);
+            if (L.source instanceof CompItem) {
+                var r = findControlChain(L.source, depthLimit - 1);
+                if (r) return { comp: r.comp, chain: [L].concat(r.chain) };
+            }
+        }
+        return null;
+    }
+
     function countByBase(comp, base) {
         var n = 0;
         for (var i = 1; i <= comp.numLayers; i++) {
@@ -149,6 +165,8 @@
             if (!found) {
                 var s = fx.addProperty("ADBE Slider Control");
                 s.name = names[0];
+                // 滑桿預設值固定為 0:eye=0 睜眼、mouth=0 第一張嘴、眉=0 第一個眉毛、emo=0 無特效
+                try { s.property(1).setValue(0); } catch (e0) {}
             }
         }
         if (!fx.property("face position")) {
@@ -805,8 +823,11 @@
         { zh:"身體",  en:"body",      cat:"身體" },
         { zh:"衣服",  en:"cloth",     cat:"身體" },
         { zh:"裙子",  en:"skirt",     cat:"身體" },
+        { zh:"褲子",  en:"pants",     cat:"身體" },
         { zh:"腰帶",  en:"belt",      cat:"身體" },
         { zh:"屁股",  en:"hip",       cat:"身體" },
+        { zh:"手",    en:"hand",      cat:"身體" },
+        { zh:"腳",    en:"foot",      cat:"身體" },
 
         // 手臂只分上下臂(各左右),整隻沒拆的就命名為「上臂」
         { zh:"上臂左", en:"arm_up_L",  cat:"手臂" },
@@ -824,6 +845,14 @@
         { zh:"帽子",  en:"hat",       cat:"配件" },
         { zh:"包包",  en:"bag",       cat:"配件" },
         { zh:"尾巴",  en:"tail",      cat:"配件" },
+        { zh:"眼鏡",  en:"glasses",   cat:"配件" },
+        { zh:"圍巾",  en:"scarf",     cat:"配件" },
+        { zh:"項鍊",  en:"necklace",  cat:"配件" },
+        { zh:"翅膀",  en:"wing",      cat:"配件" },
+        { zh:"寶石",  en:"gem",       cat:"配件" },
+        { zh:"鈕扣",  en:"button",    cat:"配件" },
+        { zh:"鞋",    en:"shoe",      cat:"配件" },
+        { zh:"線",    en:"line",      cat:"配件" },
         { zh:"陰影",  en:"shadow",    cat:"配件" },
         { zh:"光",    en:"light",     cat:"配件" }
     ];
@@ -1029,6 +1058,36 @@
             for (var i = 1; i < sel.length; i++) sel[i].parent = n;
         } finally { app.endUndoGroup(); }
         alert(sel.length + " 個圖層已綁到「" + nm + "」之下,劇情動作打在它身上。");
+    }
+
+    // ── 綁到最後選取的圖層:把前面選取的圖層全部 parent 到「最後選取」那一個 ──
+    // 給對照表/骨架規則涵蓋不到的零件用(褲子線、OOline、寶石、包包、配件…):
+    // 先框選一堆零件,最後再按住 Shift/Ctrl 點一下要當父層的圖層(例如 body / hip),
+    // 再按此鈕,就把那些零件全掛上去。AE 指定 parent 時會保持外觀不跳動。
+    function doParentToLast() {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length < 2) {
+            alert("先選取要綁定的零件圖層(可複選),最後再加選一個要當「父層」的圖層,再按此鈕。\n" +
+                  "(時間軸最下面被選到的那一個會當父層)");
+            return;
+        }
+        // AE 的 selectedLayers 依圖層索引(由上到下)排序,最後一個 = 時間軸最下面那層當父層
+        var parentLay = sel[sel.length - 1];
+        app.beginUndoGroup("綁到最後選取圖層");
+        var linked = 0, skipped = [];
+        try {
+            for (var i = 0; i < sel.length - 1; i++) {
+                if (sel[i] === parentLay) continue;
+                if (sel[i].parent) { skipped.push(sel[i].name); continue; }
+                sel[i].parent = parentLay;
+                linked++;
+            }
+        } finally { app.endUndoGroup(); }
+        var msg = "已把 " + linked + " 個零件掛到「" + parentLay.name + "」之下。";
+        if (skipped.length) msg += "\n已跳過(原本就有 parent):\n  " + skipped.join("、") +
+                                   "\n(要改掛請先在時間軸把它們的 parent 設成「無」再試)";
+        showStatus(msg);
     }
 
     // ── 縮小 comp 到有圖層內容的最小範圍 ──────────────────────
@@ -1252,6 +1311,52 @@
         } finally { app.endUndoGroup(); }
         alert(count === 0 ? "選取的圖層上找不到可調速的表達式(speed / period / wiggle)。"
                           : "已調整 " + count + " 個表達式,倍速 ×" + m + "。");
+    }
+
+    // 在 wiggle(freq, amp) 裡把第二個參數(幅度)乘上倍率
+    function scaleWiggleAmp(ex, factor) {
+        var idx = ex.indexOf("wiggle(");
+        if (idx === -1) return null;
+        var start = idx + "wiggle(".length;
+        // 跳過第一個參數(頻率)到逗號
+        var comma = ex.indexOf(",", start);
+        if (comma === -1) return null;
+        var p = comma + 1;
+        while (p < ex.length && ex.charAt(p) === " ") p++;
+        var end = p;
+        while (end < ex.length && "0123456789.".indexOf(ex.charAt(end)) !== -1) end++;
+        var num = parseFloat(ex.substring(p, end));
+        if (isNaN(num)) return null;
+        var v = Math.round(num * factor * 100) / 100;
+        return ex.substring(0, p) + v + ex.substring(end);
+    }
+
+    // 表達式倍幅:把面板動態的「幅度」放大/縮小(呼吸/漂浮/擺動的 amp、說話開合 amp、wiggle 幅度)。
+    // 倍速只改快慢,倍幅才改「動多大」—— 感覺沒差通常是因為幅度太小,用這個放大。
+    function retimeExprAmp() {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先選取掛了動態表達式的圖層。"); return; }
+        var m = promptStepper("表達式倍幅", "倍幅?(2 = 幅度兩倍,0.5 = 一半)", 1, 0.1);
+        if (m === null) return;
+        if (m <= 0) { alert("要輸入正數。"); return; }
+
+        var count = 0;
+        app.beginUndoGroup("表達式倍幅");
+        try {
+            for (var s = 0; s < sel.length; s++) {
+                var props = [];
+                scanExprProps(sel[s], props);
+                for (var p = 0; p < props.length; p++) {
+                    var ex = props[p].expression, changed = false, r;
+                    r = scaleNumber(ex, "amp = ", m);     if (r !== null) { ex = r; changed = true; }
+                    r = scaleWiggleAmp(ex, m);            if (r !== null) { ex = r; changed = true; }
+                    if (changed) { props[p].expression = ex; count++; }
+                }
+            }
+        } finally { app.endUndoGroup(); }
+        alert(count === 0 ? "選取的圖層上找不到可調幅度的表達式(amp / wiggle)。"
+                          : "已調整 " + count + " 個表達式,幅度 ×" + m + "。");
     }
 
     // ---- 常用表達式庫(存在 AE 偏好設定,跨專案永久保留) ----
@@ -1798,6 +1903,15 @@
                   "告訴面板你的某個前綴對應到哪個規則 key。");
         };
 
+        // ── 零件綁定:把任意零件掛到最後選取的圖層(對照表/骨架涵蓋不到的雜項)──
+        var rowPart = p6.add("group");
+        var labPart = rowPart.add("statictext", undefined, "零件:"); labPart.preferredSize.width = 70;
+        var bPart = rowPart.add("button", undefined, "綁到最後選取的圖層"); bPart.preferredSize.width = 160;
+        bPart.onClick = doParentToLast;
+        var rowPart2 = p6.add("group");
+        rowPart2.add("statictext", undefined, "").preferredSize.width = 70;
+        rowPart2.add("statictext", undefined, "先選零件(褲子線/寶石/包包…),最後加選父層(body/hip),再按");
+
         // ── 綁定別名(使用者自訂命名 → 骨架規則 key)───────────
         var rowAlias = p6.add("group");
         var labAlias = rowAlias.add("statictext", undefined, "綁定別名:"); labAlias.preferredSize.width = 70;
@@ -1858,8 +1972,11 @@
         var rowRt = p2.add("group");
         var bLoopT = rowRt.add("button", undefined, "循環 key 節奏…"); bLoopT.preferredSize.width = 110;
         var bExprT = rowRt.add("button", undefined, "表達式倍速…");   bExprT.preferredSize.width = 110;
+        var bExprA = rowRt.add("button", undefined, "表達式倍幅…");   bExprA.preferredSize.width = 110;
         bLoopT.onClick = retimeLoopKeys;
         bExprT.onClick = retimeExprSpeed;
+        bExprA.onClick = retimeExprAmp;
+        p2.add("statictext", undefined, "倍速=改快慢(speed/period/wiggle頻率);倍幅=改動多大(amp/wiggle幅度)。覺得沒差就調倍幅。");
 
         // --- 演出(手動下 key:人待在主場景,key 寫進角色的 control) ---
         var p3 = makeTab("演出(手動Key)");
@@ -1890,10 +2007,12 @@
         refreshRigComps();
         bScan.onClick = refreshRigComps;
 
-        // ── 鎖定角色:可直接鎖「目前選取的角色圖層」(在外層合成裡的頭/角色 precomp),
-        // 之後下 key 會自動換算成該角色內部的時間,不用切進頭合成。
-        // 若該角色合成本身就有 control(沒有額外的頭/角色 comp),也可直接鎖目前合成。
-        var lockedTarget = null; // { comp, layer } ; layer 為 null 表示直接鎖目前合成本身
+        // ── 鎖定角色:在外層合成選取角色圖層即可,control 不必在角色 precomp 的第一層 ──
+        // 會自動往內挖(角色 precomp → 頭 precomp …)找到含 control 的合成,
+        // 下 key 時自動把外層時間換算成該角色內部合成的時間,不用切進頭合成。
+        // 若目前合成本身就有 control(無頭層結構),也可不選圖層直接鎖目前合成。
+        // layerChain:從外層選取圖層往內、到含 control 那層之間的圖層串(外→內);空陣列=直接鎖目前合成。
+        var lockedTarget = null; // { comp, layerChain:[...] }
         var rowLock = p3.add("group");
         var bLock = rowLock.add("button", undefined, "鎖定選取角色圖層"); bLock.preferredSize.width = 140;
         var bUnlock = rowLock.add("button", undefined, "解除鎖定"); bUnlock.preferredSize.width = 80;
@@ -1903,30 +2022,36 @@
             var c = app.project.activeItem;
             if (!(c instanceof CompItem)) { alert("先點開外層合成,選取角色圖層再按此按鈕。"); return; }
             var sel = c.selectedLayers;
-            if (sel.length > 0 && sel[0].source instanceof CompItem && findLayer(sel[0].source, "control")) {
-                lockedTarget = { comp: sel[0].source, layer: sel[0] };
-                lockLabel.text = "已鎖定:「" + sel[0].name + "」(內部合成:" + sel[0].source.name + ")";
-                return;
+            if (sel.length > 0 && sel[0].source instanceof CompItem) {
+                // 往內挖最多 6 層,找到含 control 的合成(control 可能在頭 precomp 裡)
+                var r = findControlChain(sel[0].source, 6);
+                if (r) {
+                    lockedTarget = { comp: r.comp, layerChain: [sel[0]].concat(r.chain) };
+                    lockLabel.text = "已鎖定:「" + sel[0].name + "」(control 在:" + r.comp.name + ")";
+                    return;
+                }
             }
             if (findLayer(c, "control")) {
-                lockedTarget = { comp: c, layer: null };
+                lockedTarget = { comp: c, layerChain: [] };
                 lockLabel.text = "已鎖定:目前合成「" + c.name + "」本身(無頭層結構)";
                 return;
             }
             alert("找不到可鎖定的角色。\n" +
-                  "請選取一個「來源合成內含 control」的角色圖層,\n" +
-                  "或直接打開角色本身就有 control 的合成(無頭層結構)。");
+                  "請在外層合成選取一個角色圖層(它的來源合成裡、或更內層含有 control),\n" +
+                  "或直接打開角色本身就有 control 的合成(無頭層結構)。\n\n" +
+                  "提示:control 圖層名稱必須剛好是「control」(英文小寫),面板才認得;\n" +
+                  "角色圖層本身叫什麼名字(中文英文都行)沒關係。");
         };
         bUnlock.onClick = function () {
             lockedTarget = null;
             lockLabel.text = "(未鎖定,使用上面下拉選的角色)";
         };
 
-        // 鎖定的圖層可能被使用者刪掉/換掉,存取前先確認還活著。失效就自動解鎖。
+        // 鎖定的圖層串可能被使用者刪掉/換掉,存取前先確認最外層那個還活著。失效就自動解鎖。
         function lockedLayerAlive() {
-            if (!(lockedTarget && lockedTarget.layer)) return false;
+            if (!(lockedTarget && lockedTarget.layerChain && lockedTarget.layerChain.length)) return false;
             try {
-                var _ = lockedTarget.layer.containingComp; // 已刪除的圖層存取會丟錯
+                var _ = lockedTarget.layerChain[0].containingComp; // 已刪除的圖層存取會丟錯
                 return true;
             } catch (e) {
                 lockedTarget = null;
@@ -1937,7 +2062,7 @@
 
         function targetComp() {
             if (lockedTarget) {
-                if (lockedTarget.layer && !lockedLayerAlive()) {
+                if (lockedTarget.layerChain.length && !lockedLayerAlive()) {
                     // 圖層失效後 lockedTarget 已被清空,落回下拉選單
                 } else {
                     return lockedTarget.comp;
@@ -1948,15 +2073,19 @@
         }
 
         // 用「目前開著的合成」的時間下 key(你們所有合成都是同一條全片時間軸)
-        // 若鎖定的是外層合成裡的角色層,換算成該角色內部合成的時間。
+        // 若鎖定的是外層合成裡的角色層,沿著 layerChain 一路把外層時間換算成最內層 control 合成的時間。
         function nowTime(tc) {
             if (lockedLayerAlive()) {
-                var layer = lockedTarget.layer;
-                var outer = layer.containingComp;
-                return (outer.time - layer.startTime) * 100 / layer.stretch;
+                var chain = lockedTarget.layerChain;
+                var a = app.project.activeItem;
+                var t = (a instanceof CompItem) ? a.time : chain[0].containingComp.time;
+                for (var i = 0; i < chain.length; i++) {
+                    t = (t - chain[i].startTime) * 100 / chain[i].stretch;
+                }
+                return t;
             }
-            var a = app.project.activeItem;
-            return (a instanceof CompItem) ? a.time : tc.time;
+            var a2 = app.project.activeItem;
+            return (a2 instanceof CompItem) ? a2.time : tc.time;
         }
 
         function remoteKey(role, val) {
@@ -2039,7 +2168,7 @@
         var bFlash = rowShort.add("button", undefined, "閃爍"); bFlash.preferredSize.width = 70;
 
         function needLockedLayer() {
-            if (lockedLayerAlive()) return lockedTarget.layer;
+            if (lockedLayerAlive()) return lockedTarget.layerChain[0];
             alert("這個快捷鍵需要先在外層合成選取角色圖層,\n再按上面的「鎖定選取角色圖層」。");
             return null;
         }
