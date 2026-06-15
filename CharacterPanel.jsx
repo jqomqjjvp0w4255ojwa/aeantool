@@ -57,16 +57,19 @@
         d.alignChildren = ["fill", "top"];
         d.add("statictext", undefined, label);
         var g = d.add("group");
-        var minus = g.add("button", undefined, "−"); minus.preferredSize.width = 26;
         var et = g.add("edittext", undefined, String(value)); et.preferredSize.width = 60;
-        var plus = g.add("button", undefined, "+"); plus.preferredSize.width = 26;
-        minus.onClick = function () {
-            var v = parseFloat(et.text); if (isNaN(v)) v = value;
-            et.text = String(Math.round((v - step) * 100) / 100);
-        };
-        plus.onClick = function () {
+        var spin = g.add("group");
+        spin.orientation = "column";
+        spin.spacing = 0;
+        var up = spin.add("button", undefined, "▲"); up.preferredSize.width = 22; up.preferredSize.height = 11;
+        var down = spin.add("button", undefined, "▼"); down.preferredSize.width = 22; down.preferredSize.height = 11;
+        up.onClick = function () {
             var v = parseFloat(et.text); if (isNaN(v)) v = value;
             et.text = String(Math.round((v + step) * 100) / 100);
+        };
+        down.onClick = function () {
+            var v = parseFloat(et.text); if (isNaN(v)) v = value;
+            et.text = String(Math.round((v - step) * 100) / 100);
         };
         var btns = d.add("group");
         btns.alignment = "right";
@@ -1535,19 +1538,10 @@
         bSpec.preferredSize.width = 52;
         bSpec.onClick = doSpecialTag;
 
-        var rowCtl = p1.add("group");
-        var bNum = rowCtl.add("button", undefined, "編號狀態…");
+        var rowNum = p1.add("group");
+        var bNum = rowNum.add("button", undefined, "編號狀態…");
         bNum.preferredSize.width = 86;
         bNum.onClick = doNumberedTag;
-        var bCtl = rowCtl.add("button", undefined, "建 control(含常用滑桿)");
-        bCtl.preferredSize.width = 160;
-        bCtl.onClick = function () {
-            var comp = activeComp(); if (!comp) return;
-            app.beginUndoGroup("建 control");
-            try { ensureControl(comp); } finally { app.endUndoGroup(); }
-            alert("control 已就緒:eye / mouth / 眉 / emo 滑桿 + face position 點控制。\n" +
-                  "(已存在的話只補缺少的滑桿,不會動到既有 key)");
-        };
         fullRigCheck = p1.add("checkbox", undefined, "完整綁定(建 face/eye/mouth/ear Null 並 parent)");
         fullRigCheck.value = false;
 
@@ -1673,8 +1667,33 @@
         bToEn.onClick = function () { convScope("toEn"); };
         bToZh.onClick = function () { convScope("toZh"); };
 
-        // ====== 綁定分頁（控制 NULL / 骨架 / 錨點 / 裁切）======
+        // ── Comp 裁切（標籤 + 兩步驟按鈕同列）──────────────────
+        var rowCrop = p5.add("group");
+        var labCrop = rowCrop.add("statictext", undefined, "裁切:"); labCrop.preferredSize.width = 70;
+        var bSoloRoi = rowCrop.add("button", undefined, "①solo+框"); bSoloRoi.preferredSize.width = 90;
+        var bDoCrop  = rowCrop.add("button", undefined, "②裁切還原"); bDoCrop.preferredSize.width = 90;
+        bSoloRoi.onClick = doSoloAndROI;
+        bDoCrop.onClick  = doCropToROI;
+        var rowCrop2 = p5.add("group");
+        var labCrop2 = rowCrop2.add("statictext", undefined, ""); labCrop2.preferredSize.width = 70;
+        var bTrim = rowCrop2.add("button", undefined, "或：自動縮到有圖範圍"); bTrim.preferredSize.width = 180;
+        bTrim.onClick = doTrimToContent;
+
+        // ====== 綁定分頁（控制 NULL / 骨架 / 錨點）======
         var p6 = makeTab("綁定");
+
+        // ── 建立角色 control（含常用滑桿）──────────────────────
+        var rowCtl = p6.add("group");
+        var labCtl = rowCtl.add("statictext", undefined, "Control:"); labCtl.preferredSize.width = 70;
+        var bCtl = rowCtl.add("button", undefined, "建 control(含常用滑桿)");
+        bCtl.preferredSize.width = 160;
+        bCtl.onClick = function () {
+            var comp = activeComp(); if (!comp) return;
+            app.beginUndoGroup("建 control");
+            try { ensureControl(comp); } finally { app.endUndoGroup(); }
+            alert("control 已就緒:eye / mouth / 眉 / emo 滑桿 + face position 點控制。\n" +
+                  "(已存在的話只補缺少的滑桿,不會動到既有 key)");
+        };
 
         // ── 控制 NULL（標籤 + 兩按鈕同列）─────────────────────
         var rowNu = p6.add("group");
@@ -1750,18 +1769,6 @@
             alert("目前的綁定別名:\n" + lines.join("\n"));
         };
 
-        // ── Comp 裁切（標籤 + 兩步驟按鈕同列）──────────────────
-        var rowCrop = p6.add("group");
-        var labCrop = rowCrop.add("statictext", undefined, "裁切:"); labCrop.preferredSize.width = 70;
-        var bSoloRoi = rowCrop.add("button", undefined, "①solo+框"); bSoloRoi.preferredSize.width = 90;
-        var bDoCrop  = rowCrop.add("button", undefined, "②裁切還原"); bDoCrop.preferredSize.width = 90;
-        bSoloRoi.onClick = doSoloAndROI;
-        bDoCrop.onClick  = doCropToROI;
-        var rowCrop2 = p6.add("group");
-        var labCrop2 = rowCrop2.add("statictext", undefined, ""); labCrop2.preferredSize.width = 70;
-        var bTrim = rowCrop2.add("button", undefined, "或：自動縮到有圖範圍"); bTrim.preferredSize.width = 180;
-        bTrim.onClick = doTrimToContent;
-
         // --- 動態(自動微動,跑整部影片不用人工) ---
         var p2 = makeTab("動態(自動)");
         p2.add("statictext", undefined, "套用後自動循環播放,不用打 key(眨眼/說話開合/呼吸/漂浮/擺動):");
@@ -1813,13 +1820,52 @@
         refreshRigComps();
         bScan.onClick = refreshRigComps;
 
+        // ── 鎖定角色:可直接鎖「目前選取的角色圖層」(在外層合成裡的頭/角色 precomp),
+        // 之後下 key 會自動換算成該角色內部的時間,不用切進頭合成。
+        // 若該角色合成本身就有 control(沒有額外的頭/角色 comp),也可直接鎖目前合成。
+        var lockedTarget = null; // { comp, layer } ; layer 為 null 表示直接鎖目前合成本身
+        var rowLock = p3.add("group");
+        var bLock = rowLock.add("button", undefined, "鎖定選取角色圖層"); bLock.preferredSize.width = 140;
+        var bUnlock = rowLock.add("button", undefined, "解除鎖定"); bUnlock.preferredSize.width = 80;
+        var lockLabel = rowLock.add("statictext", undefined, "(未鎖定,使用上面下拉選的角色)");
+        lockLabel.preferredSize.width = 260;
+        bLock.onClick = function () {
+            var c = app.project.activeItem;
+            if (!(c instanceof CompItem)) { alert("先點開外層合成,選取角色圖層再按此按鈕。"); return; }
+            var sel = c.selectedLayers;
+            if (sel.length > 0 && sel[0].source instanceof CompItem && findLayer(sel[0].source, "control")) {
+                lockedTarget = { comp: sel[0].source, layer: sel[0] };
+                lockLabel.text = "已鎖定:「" + sel[0].name + "」(內部合成:" + sel[0].source.name + ")";
+                return;
+            }
+            if (findLayer(c, "control")) {
+                lockedTarget = { comp: c, layer: null };
+                lockLabel.text = "已鎖定:目前合成「" + c.name + "」本身(無頭層結構)";
+                return;
+            }
+            alert("找不到可鎖定的角色。\n" +
+                  "請選取一個「來源合成內含 control」的角色圖層,\n" +
+                  "或直接打開角色本身就有 control 的合成(無頭層結構)。");
+        };
+        bUnlock.onClick = function () {
+            lockedTarget = null;
+            lockLabel.text = "(未鎖定,使用上面下拉選的角色)";
+        };
+
         function targetComp() {
-            if (!charDrop.selection) { alert("先按 ↻ 掃描專案,再從下拉選角色(有 control 的合成)。"); return null; }
+            if (lockedTarget) return lockedTarget.comp;
+            if (!charDrop.selection) { alert("先按 ↻ 掃描專案,再從下拉選角色(有 control 的合成),\n或用「鎖定選取角色圖層」。"); return null; }
             return rigComps[charDrop.selection.index];
         }
 
         // 用「目前開著的合成」的時間下 key(你們所有合成都是同一條全片時間軸)
+        // 若鎖定的是外層合成裡的角色層,換算成該角色內部合成的時間。
         function nowTime(tc) {
+            if (lockedTarget && lockedTarget.layer) {
+                var layer = lockedTarget.layer;
+                var outer = layer.containingComp;
+                return (outer.time - layer.startTime) * 100 / layer.stretch;
+            }
             var a = app.project.activeItem;
             return (a instanceof CompItem) ? a.time : tc.time;
         }
@@ -1894,6 +1940,74 @@
             alert(lines.length === 0
                 ? "「" + sliderName + "」滑桿目前沒有任何圖層的不透明度跟它連動。"
                 : "「" + sliderName + "」滑桿的值對應(填到上面「值」欄):\n" + lines.join("\n"));
+        };
+
+        // ── 演出快捷鍵(嚇一跳/翻轉/閃爍 需先「鎖定選取角色圖層」)──
+        p3.add("statictext", undefined, "演出快捷鍵(嚇一跳/翻轉/閃爍 要先鎖定角色圖層;噴汗適用所有模式):");
+        var rowShort = p3.add("group");
+        var bShock = rowShort.add("button", undefined, "嚇一跳"); bShock.preferredSize.width = 70;
+        var bFlip  = rowShort.add("button", undefined, "左右翻轉"); bFlip.preferredSize.width = 70;
+        var bSweat = rowShort.add("button", undefined, "噴汗"); bSweat.preferredSize.width = 70;
+        var bFlash = rowShort.add("button", undefined, "閃爍"); bFlash.preferredSize.width = 70;
+
+        function needLockedLayer() {
+            if (lockedTarget && lockedTarget.layer) return lockedTarget.layer;
+            alert("這個快捷鍵需要先在外層合成選取角色圖層,\n再按上面的「鎖定選取角色圖層」。");
+            return null;
+        }
+
+        bShock.onClick = function () {
+            var layer = needLockedLayer(); if (!layer) return;
+            app.beginUndoGroup("演出:嚇一跳");
+            try {
+                var scale = layer.property("ADBE Transform Group").property("ADBE Scale");
+                var outer = layer.containingComp;
+                var t = outer.time;
+                var base = scale.valueAtTime(t, false);
+                var big = [base[0] * 1.2, base[1] * 1.2];
+                scale.setValueAtTime(t, base);
+                scale.setValueAtTime(t + 0.08, big);
+                scale.setValueAtTime(t + 0.20, base);
+            } finally { app.endUndoGroup(); }
+            showStatus("已加入「嚇一跳」縮放動畫(目前時間附近)。");
+        };
+
+        bFlip.onClick = function () {
+            var layer = needLockedLayer(); if (!layer) return;
+            app.beginUndoGroup("演出:左右翻轉");
+            try {
+                var scale = layer.property("ADBE Transform Group").property("ADBE Scale");
+                var outer = layer.containingComp;
+                var t = outer.time;
+                var base = scale.valueAtTime(t, false);
+                var flipped = [-base[0], base[1]];
+                if (base.length > 2) flipped.push(base[2]);
+                scale.setValueAtTime(t, flipped);
+                var k = scale.nearestKeyIndex(t);
+                scale.setInterpolationTypeAtKey(k, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+            } finally { app.endUndoGroup(); }
+            showStatus("已在目前時間下「左右翻轉」HOLD key(Scale X 正負互換)。");
+        };
+
+        bSweat.onClick = function () { remoteKey("emo", 1); showStatus("已下「噴汗」key(emo 滑桿 = 1)。"); };
+
+        bFlash.onClick = function () {
+            var layer = needLockedLayer(); if (!layer) return;
+            app.beginUndoGroup("演出:閃爍");
+            try {
+                var op = layer.property("ADBE Transform Group").property("ADBE Opacity");
+                var outer = layer.containingComp;
+                var t = outer.time;
+                var base = op.valueAtTime(t, false);
+                var seq = [base, 20, base, 20, base];
+                for (var i = 0; i < seq.length; i++) {
+                    var kt = t + i * 0.06;
+                    op.setValueAtTime(kt, seq[i]);
+                    var k = op.nearestKeyIndex(kt);
+                    op.setInterpolationTypeAtKey(k, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+                }
+            } finally { app.endUndoGroup(); }
+            showStatus("已加入「閃爍」不透明度 HOLD key 序列(目前時間附近)。");
         };
 
         // --- 表達式工具 ---
