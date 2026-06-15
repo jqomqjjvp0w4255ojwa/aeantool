@@ -845,16 +845,18 @@
         { zh:"帽子",  en:"hat",       cat:"配件" },
         { zh:"包包",  en:"bag",       cat:"配件" },
         { zh:"尾巴",  en:"tail",      cat:"配件" },
-        { zh:"眼鏡",  en:"glasses",   cat:"配件" },
-        { zh:"圍巾",  en:"scarf",     cat:"配件" },
-        { zh:"項鍊",  en:"necklace",  cat:"配件" },
-        { zh:"翅膀",  en:"wing",      cat:"配件" },
-        { zh:"寶石",  en:"gem",       cat:"配件" },
-        { zh:"鈕扣",  en:"button",    cat:"配件" },
-        { zh:"鞋",    en:"shoe",      cat:"配件" },
-        { zh:"線",    en:"line",      cat:"配件" },
         { zh:"陰影",  en:"shadow",    cat:"配件" },
-        { zh:"光",    en:"light",     cat:"配件" }
+        { zh:"光",    en:"light",     cat:"配件" },
+
+        // 較少用的配件,命名頁預設收合在「更多配件」裡
+        { zh:"眼鏡",  en:"glasses",   cat:"配件2" },
+        { zh:"圍巾",  en:"scarf",     cat:"配件2" },
+        { zh:"項鍊",  en:"necklace",  cat:"配件2" },
+        { zh:"翅膀",  en:"wing",      cat:"配件2" },
+        { zh:"寶石",  en:"gem",       cat:"配件2" },
+        { zh:"鈕扣",  en:"button",    cat:"配件2" },
+        { zh:"鞋",    en:"shoe",      cat:"配件2" },
+        { zh:"線",    en:"line",      cat:"配件2" }
     ];
 
     // 反向語序別名(左上臂/左大腿…)：只用於中英轉換比對，不出現在命名按鈕上。
@@ -1060,33 +1062,90 @@
         alert(sel.length + " 個圖層已綁到「" + nm + "」之下,劇情動作打在它身上。");
     }
 
-    // ── 綁到最後選取的圖層:把前面選取的圖層全部 parent 到「最後選取」那一個 ──
-    // 給對照表/骨架規則涵蓋不到的零件用(褲子線、OOline、寶石、包包、配件…):
-    // 先框選一堆零件,最後再按住 Shift/Ctrl 點一下要當父層的圖層(例如 body / hip),
-    // 再按此鈕,就把那些零件全掛上去。AE 指定 parent 時會保持外觀不跳動。
-    function doParentToLast() {
+    // 算圖層在 comp 座標下的外框(來源:sourceRectAtTime + toComp,跟 doTrimToContent 同作法)
+    function layerBBox(layer, t) {
+        try {
+            var r = layer.sourceRectAtTime(t, false);
+            if (r.width <= 0 || r.height <= 0) return null;
+            var corners = [
+                [r.left,           r.top],
+                [r.left + r.width, r.top],
+                [r.left,           r.top + r.height],
+                [r.left + r.width, r.top + r.height]
+            ];
+            var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (var c = 0; c < corners.length; c++) {
+                var pt = layer.toComp(corners[c]);
+                if (pt[0] < minX) minX = pt[0];
+                if (pt[1] < minY) minY = pt[1];
+                if (pt[0] > maxX) maxX = pt[0];
+                if (pt[1] > maxY) maxY = pt[1];
+            }
+            return { minX: minX, minY: minY, maxX: maxX, maxY: maxY };
+        } catch (e) { return null; }
+    }
+
+    function bboxOverlapArea(a, b) {
+        var w = Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX);
+        var h = Math.min(a.maxY, b.maxY) - Math.max(a.minY, b.minY);
+        if (w <= 0 || h <= 0) return 0;
+        return w * h;
+    }
+
+    function isDescendant(layer, maybeAncestor) {
+        var p = layer.parent;
+        while (p) { if (p === maybeAncestor) return true; p = p.parent; }
+        return false;
+    }
+
+    // ── 依重疊自動綁父層:給對照表/骨架規則涵蓋不到的零件用(褲子線、OOline、寶石、包包…)──
+    // 對每個選取的圖層,在時間軸「它下面」的圖層裡找畫面重疊比例最高的一個當 parent。
+    // 用目前時間那一格的外框比對,門檻 20% 以下不綁(避免亂猜)。
+    var OVERLAP_THRESHOLD = 0.2;
+
+    function doAutoParentByOverlap() {
         var comp = activeComp(); if (!comp) return;
         var sel = comp.selectedLayers;
-        if (sel.length < 2) {
-            alert("先選取要綁定的零件圖層(可複選),最後再加選一個要當「父層」的圖層,再按此鈕。\n" +
-                  "(時間軸最下面被選到的那一個會當父層)");
-            return;
-        }
-        // AE 的 selectedLayers 依圖層索引(由上到下)排序,最後一個 = 時間軸最下面那層當父層
-        var parentLay = sel[sel.length - 1];
-        app.beginUndoGroup("綁到最後選取圖層");
-        var linked = 0, skipped = [];
+        if (sel.length === 0) { alert("先選取要綁定的零件圖層(可複選),再按此鈕。"); return; }
+        var t = comp.time;
+
+        app.beginUndoGroup("依重疊自動綁父層");
+        var linked = 0, skipped = [], noMatch = [];
         try {
-            for (var i = 0; i < sel.length - 1; i++) {
-                if (sel[i] === parentLay) continue;
-                if (sel[i].parent) { skipped.push(sel[i].name); continue; }
-                sel[i].parent = parentLay;
-                linked++;
+            for (var s = 0; s < sel.length; s++) {
+                var lay = sel[s];
+                if (lay.parent) { skipped.push(lay.name); continue; }
+                var bbox = layerBBox(lay, t);
+                if (!bbox) { noMatch.push(lay.name + "(取不到外框)"); continue; }
+                var area = (bbox.maxX - bbox.minX) * (bbox.maxY - bbox.minY);
+
+                var best = null, bestRatio = 0;
+                for (var i = 1; i <= comp.numLayers; i++) {
+                    var cand = comp.layer(i);
+                    if (cand === lay) continue;
+                    if (cand.index <= lay.index) continue; // 只找「下面」的圖層
+                    if (cand.nullLayer || cand.adjustmentLayer) continue;
+                    if (isDescendant(cand, lay)) continue; // 避免互為父子造成循環
+                    var cbbox = layerBBox(cand, t);
+                    if (!cbbox) continue;
+                    var ratio = bboxOverlapArea(bbox, cbbox) / area;
+                    if (ratio > bestRatio) { bestRatio = ratio; best = cand; }
+                }
+
+                if (best && bestRatio >= OVERLAP_THRESHOLD) {
+                    lay.parent = best;
+                    linked++;
+                } else {
+                    noMatch.push(lay.name + (best
+                        ? "(最高重疊 " + Math.round(bestRatio * 100) + "%,低於門檻)"
+                        : "(下方找不到有重疊的圖層)"));
+                }
             }
         } finally { app.endUndoGroup(); }
-        var msg = "已把 " + linked + " 個零件掛到「" + parentLay.name + "」之下。";
-        if (skipped.length) msg += "\n已跳過(原本就有 parent):\n  " + skipped.join("、") +
-                                   "\n(要改掛請先在時間軸把它們的 parent 設成「無」再試)";
+
+        var msg = "已自動綁定 " + linked + " 個零件。";
+        if (skipped.length)  msg += "\n已跳過(原本就有 parent):\n  " + skipped.join("、");
+        if (noMatch.length)  msg += "\n沒綁到(請手動設定 parent):\n  " + noMatch.join("、");
         showStatus(msg);
     }
 
@@ -1781,18 +1840,40 @@
             }
         }
 
+        // 「配件2」(眼鏡/圍巾/項鍊/翅膀/寶石/鈕扣/鞋/線等較少用配件)預設收合,
+        // 用一顆「更多配件 ▾/▴」按鈕展開/收合,避免命名頁一長串。
+        var moreAccessoriesOpen = false;
+
         function rebuildNames() {
             while (nameGrid.children.length > 0) nameGrid.remove(nameGrid.children[0]);
             var allItems = fullMap();
             var cats = getCategories(allItems);
             for (var c = 0; c < cats.length; c++) {
                 var cat = cats[c];
+                if (cat === "配件2") continue; // 另外處理(收合區塊)
                 var catItems = [];
                 for (var k = 0; k < allItems.length; k++) {
                     if ((allItems[k].cat || "其他") === cat) catItems.push(allItems[k]);
                 }
                 addCategoryRow(cat, catItems);
             }
+
+            // ── 更多配件(收合區塊)──
+            var moreItems = [];
+            for (var m = 0; m < allItems.length; m++) {
+                if ((allItems[m].cat || "其他") === "配件2") moreItems.push(allItems[m]);
+            }
+            if (moreItems.length > 0) {
+                var rowToggle = nameGrid.add("group");
+                var bToggle = rowToggle.add("button", undefined, moreAccessoriesOpen ? "更多配件 ▴" : "更多配件 ▾");
+                bToggle.preferredSize.width = 90;
+                bToggle.onClick = function () {
+                    moreAccessoriesOpen = !moreAccessoriesOpen;
+                    rebuildNames();
+                };
+                if (moreAccessoriesOpen) addCategoryRow("", moreItems);
+            }
+
             // 自訂項目單獨一列
             var customs = nameMapLoad();
             if (customs.length > 0) addCategoryRow("自訂", customs);
@@ -1903,14 +1984,14 @@
                   "告訴面板你的某個前綴對應到哪個規則 key。");
         };
 
-        // ── 零件綁定:把任意零件掛到最後選取的圖層(對照表/骨架涵蓋不到的雜項)──
+        // ── 零件綁定:選取的零件自動掛到下方畫面重疊比例最高的圖層(對照表/骨架涵蓋不到的雜項)──
         var rowPart = p6.add("group");
         var labPart = rowPart.add("statictext", undefined, "零件:"); labPart.preferredSize.width = 70;
-        var bPart = rowPart.add("button", undefined, "綁到最後選取的圖層"); bPart.preferredSize.width = 160;
-        bPart.onClick = doParentToLast;
+        var bPart = rowPart.add("button", undefined, "依重疊自動綁父層"); bPart.preferredSize.width = 130;
+        bPart.onClick = doAutoParentByOverlap;
         var rowPart2 = p6.add("group");
         rowPart2.add("statictext", undefined, "").preferredSize.width = 70;
-        rowPart2.add("statictext", undefined, "先選零件(褲子線/寶石/包包…),最後加選父層(body/hip),再按");
+        rowPart2.add("statictext", undefined, "選零件(褲子線/寶石/包包…),自動綁到下方重疊最多的圖層(已有parent的會跳過)");
 
         // ── 綁定別名(使用者自訂命名 → 骨架規則 key)───────────
         var rowAlias = p6.add("group");
