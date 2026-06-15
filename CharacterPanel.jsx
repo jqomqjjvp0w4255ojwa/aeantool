@@ -635,24 +635,6 @@
         showStatus("已套擺動到 " + sel.length + " 個圖層(Rotation ±3°)。建議先建控制NULL再套,避免跟其他旋轉表達式衝突。");
     }
 
-    // ================= 3. 演出:說話 key =================
-
-    function setMouthKey(talking) {
-        var comp = activeComp(); if (!comp) return;
-        app.beginUndoGroup(talking ? "開始說話" : "停止說話");
-        try {
-            var ctrl = ensureControl(comp);
-            var mouthName = sliderNameFor(comp, "mouth"); // 自動沿用 mouth 或 嘴
-            var slider = ctrl.property("ADBE Effect Parade").property(mouthName).property(1);
-            var v = talking ? talkValue(comp) : 0;
-            slider.setValueAtTime(comp.time, v);
-            // 滑桿切換一定要 HOLD,不然中間值會讓所有嘴都消失
-            var k = slider.nearestKeyIndex(comp.time);
-            slider.setInterpolationTypeAtKey(k,
-                KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
-        } finally { app.endUndoGroup(); }
-    }
-
     // ================= 4. 表達式工具 =================
 
     var PROP_CHOICES = [
@@ -1853,8 +1835,27 @@
             lockLabel.text = "(未鎖定,使用上面下拉選的角色)";
         };
 
+        // 鎖定的圖層可能被使用者刪掉/換掉,存取前先確認還活著。失效就自動解鎖。
+        function lockedLayerAlive() {
+            if (!(lockedTarget && lockedTarget.layer)) return false;
+            try {
+                var _ = lockedTarget.layer.containingComp; // 已刪除的圖層存取會丟錯
+                return true;
+            } catch (e) {
+                lockedTarget = null;
+                lockLabel.text = "(鎖定的圖層已失效,已自動解鎖)";
+                return false;
+            }
+        }
+
         function targetComp() {
-            if (lockedTarget) return lockedTarget.comp;
+            if (lockedTarget) {
+                if (lockedTarget.layer && !lockedLayerAlive()) {
+                    // 圖層失效後 lockedTarget 已被清空,落回下拉選單
+                } else {
+                    return lockedTarget.comp;
+                }
+            }
             if (!charDrop.selection) { alert("先按 ↻ 掃描專案,再從下拉選角色(有 control 的合成),\n或用「鎖定選取角色圖層」。"); return null; }
             return rigComps[charDrop.selection.index];
         }
@@ -1862,7 +1863,7 @@
         // 用「目前開著的合成」的時間下 key(你們所有合成都是同一條全片時間軸)
         // 若鎖定的是外層合成裡的角色層,換算成該角色內部合成的時間。
         function nowTime(tc) {
-            if (lockedTarget && lockedTarget.layer) {
+            if (lockedLayerAlive()) {
                 var layer = lockedTarget.layer;
                 var outer = layer.containingComp;
                 return (outer.time - layer.startTime) * 100 / layer.stretch;
@@ -1951,7 +1952,7 @@
         var bFlash = rowShort.add("button", undefined, "閃爍"); bFlash.preferredSize.width = 70;
 
         function needLockedLayer() {
-            if (lockedTarget && lockedTarget.layer) return lockedTarget.layer;
+            if (lockedLayerAlive()) return lockedTarget.layer;
             alert("這個快捷鍵需要先在外層合成選取角色圖層,\n再按上面的「鎖定選取角色圖層」。");
             return null;
         }
