@@ -209,6 +209,53 @@
         return out;
     }
 
+    // 五官標記圖層名的中英對照:讓「轉英文」後動態功能仍找得到(以中文為主鍵,英文為別名)。
+    // 英文名刻意跟命名頁的 mouth/eyebrow 區隔(mouth_close / brow…),避免轉換時互撞。
+    var FEATURE_NAMES = {
+        "閉眼":   ["閉眼", "eye_close"],
+        "睜眼":   ["睜眼", "eye_open"],
+        "眼":     ["眼"],
+        "嘴":     ["嘴",   "mouth_close"],
+        "說話嘴": ["說話嘴", "mouth_talk"],
+        "眉":     ["眉",   "brow"],
+        "特效":   ["特效", "emo_fx"],
+        "眼軸":   ["眼軸", "eye_axis"],
+        "嘴軸":   ["嘴軸", "mouth_axis"]
+    };
+    function featureNames(zhBase) { return FEATURE_NAMES[zhBase] || [zhBase]; }
+
+    // 五官標記名的中英轉換對照(給命名頁「轉英文/轉中文」用)。
+    // 英文刻意用 mouth_close / brow… 跟命名頁的 mouth/eyebrow 區隔,round-trip 不互撞。
+    var FEATURE_CONV = [
+        { zh:"閉眼",   en:"eye_close" },
+        { zh:"睜眼",   en:"eye_open" },
+        { zh:"嘴",     en:"mouth_close" },
+        { zh:"說話嘴", en:"mouth_talk" },
+        { zh:"眉",     en:"brow" },
+        { zh:"特效",   en:"emo_fx" },
+        { zh:"眼軸",   en:"eye_axis" },
+        { zh:"嘴軸",   en:"mouth_axis" }
+    ];
+
+    // 用「中文主名」找圖層,找不到再用英文別名找(轉英文後仍可用)
+    function findFeature(comp, zhBase) {
+        var ns = featureNames(zhBase);
+        for (var i = 0; i < ns.length; i++) {
+            var L = findLayer(comp, ns[i]);
+            if (L) return L;
+        }
+        return null;
+    }
+    // 同上,收集整個家族(中英都收)
+    function collectFeature(comp, zhBase) {
+        var ns = featureNames(zhBase), out = [];
+        for (var i = 0; i < ns.length; i++) {
+            var fam = collectByBase(comp, ns[i]);
+            for (var j = 0; j < fam.length; j++) if (out.indexOf(fam[j]) === -1) out.push(fam[j]);
+        }
+        return out;
+    }
+
     // 說話開合擠壓表達式:掛在共用「嘴軸」Null 的 Scale 上。
     // mouth 滑桿等於「任何一個說話值」時就開合(同時只有一張嘴可見,故可共用一個嘴軸)。
     function squashMouthExpr(mouthName, activeVals) {
@@ -229,11 +276,11 @@
 
     // 把所有「說話嘴」掛到同一個共用「嘴軸」,並重設開合表達式。回傳 [{name,val}...]。
     function applyTalkSquash(comp, mouthName) {
-        var talkMouths = collectByBase(comp, "說話嘴");
+        var talkMouths = collectFeature(comp, "說話嘴");
         if (talkMouths.length === 0) return [];
 
         // 建/沿用單一共用嘴軸(放在第一張說話嘴的位置)
-        var axis = findLayer(comp, "嘴軸");
+        var axis = findFeature(comp, "嘴軸");
         if (!axis) axis = makeAxisNull(comp, talkMouths[0], "嘴軸");
 
         var vals = [], infos = [];
@@ -274,7 +321,7 @@
 
     // mouth 滑桿的「說話值」:取第一張說話嘴實際綁的值,沒有就回 1
     function talkValue(comp) {
-        var t = findLayer(comp, "說話嘴");
+        var t = findFeature(comp, "說話嘴");
         if (t) { var v = layerSliderVal(t); if (v !== null) return v; }
         return 1;
     }
@@ -489,11 +536,11 @@
         try {
             ensureControl(comp);
             var mouthName = sliderNameFor(comp, "mouth");
-            if (collectByBase(comp, "說話嘴").length > 0) {
+            if (collectFeature(comp, "說話嘴").length > 0) {
                 alert("這個角色已經有「說話嘴」了。\n要再加一張請用「標記」的「說話嘴」按鈕複製現有嘴型。");
                 return;
             }
-            var refLay = findLayer(comp, "嘴") ||
+            var refLay = findFeature(comp, "嘴") ||
                          (comp.selectedLayers.length ? comp.selectedLayers[0] : null);
             if (!refLay) { alert("先標記一張「嘴」,或選取一張嘴圖層,再按「補說話嘴」。"); return; }
             var openLay = createOpenMouth(comp, refLay);
@@ -511,8 +558,8 @@
         try {
             ensureControl(comp);
             var mouthName = sliderNameFor(comp, "mouth");
-            if (findLayer(comp, "嘴")) { alert("這個角色已經有「嘴」(閉嘴)了。"); return; }
-            var refLay = collectByBase(comp, "說話嘴")[0] ||
+            if (findFeature(comp, "嘴")) { alert("這個角色已經有「嘴」(閉嘴)了。"); return; }
+            var refLay = collectFeature(comp, "說話嘴")[0] ||
                          (comp.selectedLayers.length ? comp.selectedLayers[0] : null);
             if (!refLay) { alert("先有一張「說話嘴」,或選取一張嘴圖層,再按「補閉嘴」。"); return; }
             var closedLay = createClosedMouth(comp, refLay);
@@ -530,10 +577,10 @@
         try {
             ensureControl(comp);
             var browSliderName = sliderNameFor(comp, "眉");
-            var refLay = findLayer(comp, "眉") ||
+            var refLay = findFeature(comp, "眉") ||
                          (comp.selectedLayers.length ? comp.selectedLayers[0] : null);
             if (!refLay) { alert("先標記一個「眉」,或選取一張眉圖層,再按「補眉」。"); return; }
-            var startIdx = countByBase(comp, "眉") + 1; // 接在現有眉之後編號
+            var startIdx = collectFeature(comp, "眉").length + 1; // 接在現有眉之後編號
             var made = [];
             for (var k = 0; k < 2; k++) {
                 var nm = "眉 " + (startIdx + k);
@@ -566,7 +613,7 @@
                          "眼軸", "嘴軸"];
             var linked = 0, skipped = 0;
             for (var b = 0; b < bases.length; b++) {
-                var fam = collectByBase(comp, bases[b]);
+                var fam = collectFeature(comp, bases[b]); // 中英都收(轉英文後也找得到)
                 for (var i = 0; i < fam.length; i++) {
                     if (fam[i] === faceN) continue;
                     if (fam[i].parent === faceN) continue;
@@ -698,7 +745,7 @@
         var comp = activeComp(); if (!comp) return;
         app.beginUndoGroup("隨機眨眼");
         try {
-            var closed = findLayer(comp, "閉眼");
+            var closed = findFeature(comp, "閉眼");
             if (closed || findLayer(comp, "control")) {
                 // 標準方案:眼滑桿掛隨機眨眼 + 「眨眼」Checkbox 雙模式(妖果式)
                 //   勾選 = 自動隨機眨(手動 key 仍以最大值疊加)
@@ -730,7 +777,7 @@
                       "不需要另外新增圖層,「閉眼」圖層已自動在 eye=1 時顯示。");
             } else {
                 // 備援方案:沒有閉眼圖層 → 對「睜眼/眼」做縮放擠壓眨眼(透過眼軸,斜眼不會歪)
-                var eyeLay = findLayer(comp, "睜眼") || findLayer(comp, "眼") ||
+                var eyeLay = findFeature(comp, "睜眼") || findFeature(comp, "眼") ||
                              (comp.selectedLayers.length ? comp.selectedLayers[0] : null);
                 if (!eyeLay) { alert("找不到「閉眼」「睜眼」「眼」圖層。\n請先標記,或選取眼睛圖層後再按一次。"); return; }
                 var axis = makeAxisNull(comp, eyeLay, "眼軸");
@@ -752,8 +799,8 @@
             var ctrl = ensureControl(comp);
             var mouthName = sliderNameFor(comp, "mouth"); // 自動沿用 mouth 或 嘴
             // 收集所有「說話嘴」(可多組:開心說話、不開心說話…),各自有自己的滑桿值
-            var talkMouths = collectByBase(comp, "說話嘴");
-            var closed = findLayer(comp, "嘴");
+            var talkMouths = collectFeature(comp, "說話嘴");
+            var closed = findFeature(comp, "嘴");
             var generated = false;
 
             // 沒有說話嘴時的自動生成(維持舊有便利:只有閉嘴 → 生一張說話嘴)
@@ -1025,7 +1072,8 @@
     // 別名放最前面、NAME_MAP 居中、使用者自訂放最後 → 比對時優先順序：自訂 > NAME_MAP > 別名,
     // 同一個 en 對到多個 zh 時，轉中文會優先採用 NAME_MAP/自訂裡的寫法。
     function convMap() {
-        return NAME_ALIASES.concat(NAME_MAP).concat(nameMapLoad());
+        // FEATURE_CONV 放最後 → 比對時(由後往前)優先,確保 mouth_close 等不會被 mouth 搶走
+        return NAME_ALIASES.concat(NAME_MAP).concat(nameMapLoad()).concat(FEATURE_CONV);
     }
 
     // ── 命名輔助：數同名家族、判斷純數字 ─────────────────────
@@ -1089,10 +1137,10 @@
                     if (nm === src) {
                         lay.name = dst; count++; break;
                     }
-                    // 帶數字後綴：「頭1」→「head1」
+                    // 帶數字後綴：「頭1」→「head1」、「眉 2」→「brow 2」(保留空格)
                     if (nm.indexOf(src) === 0) {
                         var tail = nm.substring(src.length);
-                        if (/^\d+$/.test(tail)) {
+                        if (/^\d+$/.test(tail) || /^ \d+$/.test(tail)) {
                             lay.name = dst + tail; count++; break;
                         }
                     }
@@ -1121,7 +1169,7 @@
                     if (nm === src) { sel[s].name = dst; count++; break; }
                     if (nm.indexOf(src) === 0) {
                         var tail = nm.substring(src.length);
-                        if (/^\d+$/.test(tail)) { sel[s].name = dst + tail; count++; break; }
+                        if (/^\d+$/.test(tail) || /^ \d+$/.test(tail)) { sel[s].name = dst + tail; count++; break; }
                     }
                 }
             }
