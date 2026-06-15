@@ -209,8 +209,8 @@
         return out;
     }
 
-    // 五官標記圖層名的中英對照:讓「轉英文」後動態功能仍找得到(以中文為主鍵,英文為別名)。
-    // 英文名刻意跟命名頁的 mouth/eyebrow 區隔(mouth_close / brow…),避免轉換時互撞。
+    // 五官標記圖層名查找:以中文為主鍵,額外接受英文別名(防使用者自行用英文命名五官時也找得到)。
+    // 註:命名頁的「轉英文」刻意不轉這些標記層,所以一般情況用到的是中文主名。
     var FEATURE_NAMES = {
         "閉眼":   ["閉眼", "eye_close"],
         "睜眼":   ["睜眼", "eye_open"],
@@ -223,19 +223,6 @@
         "嘴軸":   ["嘴軸", "mouth_axis"]
     };
     function featureNames(zhBase) { return FEATURE_NAMES[zhBase] || [zhBase]; }
-
-    // 五官標記名的中英轉換對照(給命名頁「轉英文/轉中文」用)。
-    // 英文刻意用 mouth_close / brow… 跟命名頁的 mouth/eyebrow 區隔,round-trip 不互撞。
-    var FEATURE_CONV = [
-        { zh:"閉眼",   en:"eye_close" },
-        { zh:"睜眼",   en:"eye_open" },
-        { zh:"嘴",     en:"mouth_close" },
-        { zh:"說話嘴", en:"mouth_talk" },
-        { zh:"眉",     en:"brow" },
-        { zh:"特效",   en:"emo_fx" },
-        { zh:"眼軸",   en:"eye_axis" },
-        { zh:"嘴軸",   en:"mouth_axis" }
-    ];
 
     // 用「中文主名」找圖層,找不到再用英文別名找(轉英文後仍可用)
     function findFeature(comp, zhBase) {
@@ -1072,8 +1059,9 @@
     // 別名放最前面、NAME_MAP 居中、使用者自訂放最後 → 比對時優先順序：自訂 > NAME_MAP > 別名,
     // 同一個 en 對到多個 zh 時，轉中文會優先採用 NAME_MAP/自訂裡的寫法。
     function convMap() {
-        // FEATURE_CONV 放最後 → 比對時(由後往前)優先,確保 mouth_close 等不會被 mouth 搶走
-        return NAME_ALIASES.concat(NAME_MAP).concat(nameMapLoad()).concat(FEATURE_CONV);
+        // 五官標記層(閉眼/嘴/說話嘴/眉…)刻意不納入轉換:它們是動態按鈕讀取的依據,
+        // 保持中文不轉,避免轉英文後要全鏈雙語對應。需要英文結構的只有骨架/身體部位。
+        return NAME_ALIASES.concat(NAME_MAP).concat(nameMapLoad());
     }
 
     // ── 命名輔助：數同名家族、判斷純數字 ─────────────────────
