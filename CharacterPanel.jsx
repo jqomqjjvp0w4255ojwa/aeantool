@@ -388,8 +388,9 @@
                     var tv = nextSliderValue(comp, mouthName); // 接在目前最大值之後
                     opacityProp(dup).expression = switchExpr(mouthName, tv);
                     try { dup.moveBefore(src); } catch (eMv) {}
-                    // 套開合擠壓(掛在各自的嘴軸上,斜嘴也不歪)
-                    var axisName = (made.length === 0) ? "嘴軸" : "嘴軸 " + tv;
+                    // 套開合擠壓(掛在各自的嘴軸上,斜嘴也不歪)。
+                    // 軸名用值區分,跟「說話設定」一致,多次按也不會產生同名嘴軸。
+                    var axisName = (tv === talkValue(comp)) ? "嘴軸" : "嘴軸 " + tv;
                     var axis = makeAxisNull(comp, dup, axisName);
                     scaleProp(axis).expression = squashMouthExpr(mouthName, tv);
                     made.push("「" + dup.name + "」= " + tv);
