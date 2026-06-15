@@ -171,6 +171,26 @@
         return layer.property("ADBE Transform Group").property("ADBE Scale");
     }
 
+    // 讀某圖層不透明度表達式裡綁的滑桿值(switchExpr 寫的 == N),讀不到回傳 null
+    function layerSliderVal(layer) {
+        try {
+            var ex = opacityProp(layer).expression;
+            var m = ex.match(new RegExp("==\\s*(\\d+)"));
+            if (m) return parseInt(m[1], 10);
+        } catch (e) {}
+        return null;
+    }
+
+    // 收集名稱為 base 或「base」「base N」家族的所有圖層
+    function collectByBase(comp, base) {
+        var out = [];
+        for (var i = 1; i <= comp.numLayers; i++) {
+            var nm = comp.layer(i).name;
+            if (nm === base || nm.indexOf(base + " ") === 0) out.push(comp.layer(i));
+        }
+        return out;
+    }
+
     function blinkWindowLines(seed, minGap, maxGap, frames) {
         return [
             "var minGap = " + minGap + ", maxGap = " + maxGap + ";",
@@ -350,12 +370,14 @@
                     var v = allocSliderValue(comp, sliderName, tag.base);
                     opacityProp(lay).expression = switchExpr(sliderName, v);
 
-                    // 「說話嘴」同時複製一張一般的張嘴(不動)到固定 value 3,給靜止張嘴用
+                    // 「說話嘴」同時複製一張一般的張嘴(不動)當靜止張嘴。
+                    // 靜止嘴的值也用連號分配(慣例從 3 起),多組說話嘴各有各的靜止嘴、不撞值。
                     if (tag.dupStatic !== undefined) {
                         var dupIdx = countByBase(comp, "張嘴");
                         var dup = lay.duplicate();
                         dup.name = (dupIdx === 0) ? "張嘴" : "張嘴 " + (dupIdx + 1);
-                        opacityProp(dup).expression = switchExpr(sliderName, tag.dupStatic);
+                        var dupV = allocSliderValue(comp, sliderName, tag.dupStatic);
+                        opacityProp(dup).expression = switchExpr(sliderName, dupV);
                         try { dup.moveAfter(lay); } catch (eDup) {}
                     }
                 }
@@ -537,8 +559,10 @@
         try {
             var ctrl = ensureControl(comp);
             var mouthName = sliderNameFor(comp, "mouth"); // 自動沿用 mouth 或 嘴
-            // 說話嘴(壓扁開合用,value 1)為擠壓目標;嘴(閉著,value 0)為閉嘴
-            var target = findLayer(comp, "說話嘴"), closed = findLayer(comp, "嘴");
+            // 收集所有「說話嘴」(可多組:開心說話、不開心說話…),各自有自己的滑桿值
+            var talkMouths = collectByBase(comp, "說話嘴");
+            var closed = findLayer(comp, "嘴");
+            var generated = false;
 
             function squashExpr(activeVal) {
                 return [
@@ -553,44 +577,52 @@
                 ].join("\n");
             }
 
-            var v = talkValue(comp), generated = false; // 說話嘴固定 value 1
-
-            if (!target && closed) {
-                // 只有「嘴」(閉著):自動生一張簡易說話嘴,之後走標準閉/說切換
-                target = createOpenMouth(comp, closed);
-                opacityProp(target).expression = switchExpr(mouthName, v);
+            // 沒有說話嘴時的自動生成(維持舊有便利:只有閉嘴 → 生一張說話嘴)
+            if (talkMouths.length === 0) {
+                if (closed) {
+                    var t = createOpenMouth(comp, closed);
+                    opacityProp(t).expression = switchExpr(mouthName, talkValue(comp));
+                    opacityProp(closed).expression = switchExpr(mouthName, 0);
+                    talkMouths.push(t);
+                    generated = true;
+                } else {
+                    alert("找不到「說話嘴」或「嘴」圖層,請先在「標記」頁標記嘴巴圖層。");
+                    return;
+                }
+            }
+            // 有說話嘴但沒有閉嘴 → 自動生一條閉嘴線
+            if (!closed) {
+                closed = createClosedMouth(comp, talkMouths[0]);
                 opacityProp(closed).expression = switchExpr(mouthName, 0);
-                generated = true;
-            } else if (target && !closed) {
-                // 只有說話嘴/張嘴:自動生一條閉嘴線(#7E594C 圓角),走標準閉/說切換
-                closed = createClosedMouth(comp, target);
-                opacityProp(closed).expression = switchExpr(mouthName, 0);
-                opacityProp(target).expression = switchExpr(mouthName, v);
-                generated = "open_only";
-            } else if (!target) {
-                alert("找不到「說話嘴」或「嘴」圖層,請先在「標記」頁標記嘴巴圖層。");
-                return;
+                generated = generated || "open_only";
             }
 
-            // 擠壓掛在「嘴軸」Null 上,斜的嘴不會歪
-            var axis = makeAxisNull(comp, target, "嘴軸");
-            scaleProp(axis).expression = squashExpr(v);
+            // 對每一張說話嘴各套擠壓:用它自己綁的滑桿值、各自的嘴軸,互不干擾
+            var infos = [];
+            for (var i = 0; i < talkMouths.length; i++) {
+                var m = talkMouths[i];
+                var mv = layerSliderVal(m);
+                if (mv === null) { mv = talkValue(comp); opacityProp(m).expression = switchExpr(mouthName, mv); }
+                var axisName = (mv === talkValue(comp)) ? "嘴軸" : "嘴軸 " + mv; // 每組各自的軸,可分別轉角度
+                var axis = makeAxisNull(comp, m, axisName);
+                scaleProp(axis).expression = squashExpr(mv);
+                infos.push("「" + m.name + "」= " + mv);
+            }
 
-            var msg = "說話設定完成:" + mouthName + " 滑桿 = " + v + " 時「" + target.name + "」會自動開合,= 0 是閉嘴。\n" +
-                      "用下面的「開始/停止說話」按鈕打 key 即可。\n\n" +
-                      "嘴如果是斜的:把「嘴軸」的 Rotation 轉到跟嘴同角度,\n" +
+            var msg = "說話設定完成,已對 " + talkMouths.length + " 張說話嘴套上開合擠壓:\n  " +
+                      infos.join("\n  ") + "\n(= 0 是閉嘴)\n" +
+                      "用下面的「開始/停止說話」按鈕打 key,或在 control 的 " + mouthName +
+                      " 滑桿自己切換要用哪張嘴。\n\n" +
+                      "嘴如果是斜的:把對應的「嘴軸」Rotation 轉到跟嘴同角度,\n" +
                       "美術不會跟著轉,開合就會沿嘴的方向、不會歪。\n\n" +
-                      "【靜止張嘴】標記「說話嘴」時已順便複製一張靜態張嘴到 " + mouthName + " = 3,\n" +
-                      "演出時想要嘴張開但不動(如唱歌長音),把滑桿 key 到 3 即可。";
+                      "【靜止張嘴】標記「說話嘴」時會順便複製一張靜態張嘴(不開合),\n" +
+                      "演出時想要嘴張開但不動(如唱歌長音),把滑桿 key 到那張靜態張嘴的值即可。";
             if (generated === true) {
                 msg += "\n\n此角色原本只有「嘴」(閉著),我生了一個深色橢圓 Shape 當「說話嘴」,\n" +
                        "請花十秒調一下它的大小和顏色,讓它貼合畫風。";
             } else if (generated === "open_only") {
-                msg += "\n\n此角色只有張開的嘴,我已自動生成一條「嘴」線段(#7E594C 圓角)。\n" +
-                       "位置在嘴軸中心,你可以:\n" +
-                       "  1. 選取「嘴」圖層 → 用鋼筆工具拉 Bezier 弧度調成你要的曲線\n" +
-                       "  2. 調整 Stroke 寬度/顏色讓它配合角色畫風\n" +
-                       "滑桿 = 0 → 顯示閉嘴線 / 滑桿 = " + v + " → 顯示說話嘴,正常切換。";
+                msg += "\n\n此角色原本沒有閉嘴,我已自動生成一條「嘴」線段(#7E594C 圓角)。\n" +
+                       "位置在嘴軸中心,你可以用鋼筆工具拉 Bezier 弧度、調 Stroke 配合畫風。";
             }
             alert(msg);
         } finally { app.endUndoGroup(); }
