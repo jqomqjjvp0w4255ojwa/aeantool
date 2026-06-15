@@ -342,6 +342,45 @@
         } finally { app.endUndoGroup(); }
     }
 
+    // ── 軸心聚焦:標記軸心時,只讓選中圖層 100% 顯示,其他降到 25% ──
+    // 再按一次還原。只動「沒有掛表達式」的不透明度,避免跟滑桿切換打架。
+    var _focusMemory = null;
+
+    function doFocusToggle() {
+        var comp = activeComp(); if (!comp) return;
+
+        if (_focusMemory) {
+            app.beginUndoGroup("還原軸心聚焦");
+            try {
+                for (var i = 0; i < _focusMemory.length; i++) {
+                    try { opacityProp(_focusMemory[i].layer).setValue(_focusMemory[i].value); } catch (e) {}
+                }
+            } finally { app.endUndoGroup(); }
+            _focusMemory = null;
+            showStatus("已還原圖層不透明度。");
+            return;
+        }
+
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先選取要設定軸心的圖層,再按「軸心聚焦」。"); return; }
+
+        app.beginUndoGroup("軸心聚焦");
+        try {
+            _focusMemory = [];
+            for (var i = 1; i <= comp.numLayers; i++) {
+                var lay = comp.layer(i);
+                var op;
+                try { op = opacityProp(lay); } catch (e) { continue; }
+                if (op.expressionEnabled) continue; // 交給滑桿控制的不透明度不動
+                _focusMemory.push({ layer: lay, value: op.value });
+                var isSel = false;
+                for (var s = 0; s < sel.length; s++) if (sel[s] === lay) { isSel = true; break; }
+                op.setValue(isSel ? 100 : 25);
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已聚焦選取圖層,其他降到 25%。設定完軸心後再按一次「軸心聚焦」還原。");
+    }
+
     // ================= 2. 一鍵動態 =================
 
     function doBlink() {
@@ -399,17 +438,29 @@
         var comp = activeComp(); if (!comp) return;
         app.beginUndoGroup("說話設定");
         try {
-            ensureControl(comp);
+            var ctrl = ensureControl(comp);
             var mouthName = sliderNameFor(comp, "mouth"); // 自動沿用 mouth 或 嘴
             var open2 = findLayer(comp, "張嘴 2"), open1 = findLayer(comp, "張嘴"),
                 closed = findLayer(comp, "閉嘴");
+
+            // 「靜嘴」勾選框:勾選時即使 mouth 滑桿在說話值,嘴巴也不會開合擠壓
+            // (給「靜止張嘴」用——嘴張開但不動)
+            var fx = ctrl.property("ADBE Effect Parade");
+            var cbStill = fx.property("靜嘴");
+            if (!cbStill) {
+                cbStill = fx.addProperty("ADBE Checkbox Control");
+                cbStill.name = "靜嘴";
+                cbStill.property(1).setValue(0);
+            }
 
             function squashExpr(activeVal) {
                 return [
                     "// === 說話擠壓(" + mouthName + " 滑桿 == " + activeVal + " 時啟動) ===",
                     's = thisComp.layer("control").effect("' + mouthName + '")("Slider");',
+                    "var still = false;",
+                    'try { still = thisComp.layer("control").effect("靜嘴")("Checkbox") == 1; } catch (e) {}',
                     "var speed = 9, amp = 45; // 開合速度 / 幅度(%)",
-                    "if (s == " + activeVal + ") {",
+                    "if (s == " + activeVal + " && !still) {",
                     "  var k = 1 - (amp / 100) * Math.abs(Math.sin(time * speed));",
                     "  // 相容 2D Null(嘴軸)與 3D 圖層",
                     "  value.length > 2 ? [value[0], value[1] * k, value[2]] : [value[0], value[1] * k];",
@@ -448,7 +499,10 @@
             var msg = "說話設定完成:" + mouthName + " 滑桿 = " + v + " 時「" + target.name + "」會自動開合,= 0 是閉嘴。\n" +
                       "用下面的「開始/停止說話」按鈕打 key 即可。\n\n" +
                       "嘴如果是斜的:把「嘴軸」的 Rotation 轉到跟嘴同角度,\n" +
-                      "美術不會跟著轉,開合就會沿嘴的方向、不會歪。";
+                      "美術不會跟著轉,開合就會沿嘴的方向、不會歪。\n\n" +
+                      "【靜止張嘴】control 上多了「靜嘴」勾選框:\n" +
+                      "勾選後,即使 " + mouthName + " 在說話值,嘴巴也只張開不開合,\n" +
+                      "適合角色靜止張嘴(如唱歌長音)的演出。";
             if (generated === true) {
                 msg += "\n\n此角色原本只有閉嘴圖,我生了一個深色橢圓 Shape 當「張嘴」,\n" +
                        "請花十秒調一下它的大小和顏色,讓它貼合畫風。";
@@ -500,6 +554,25 @@
             }
         } finally { app.endUndoGroup(); }
         showStatus("已套漂浮到 " + sel.length + " 個圖層。");
+    }
+
+    function doSway() {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先選取圖層再按「擺動」。"); return; }
+        app.beginUndoGroup("擺動");
+        try {
+            for (var i = 0; i < sel.length; i++) {
+                sel[i].property("ADBE Transform Group").property("ADBE Rotate Z").expression = [
+                    "// === 微微擺動(面板自動加入) ===",
+                    "var amp = 3, period = 2.8; // 幅度(度) / 週期(秒)",
+                    "seedRandom(index, true);",
+                    "var ph = random(0, period); // 每個圖層相位錯開",
+                    "value + amp * Math.sin((time + ph) * 2 * Math.PI / period)"
+                ].join("\n");
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已套擺動到 " + sel.length + " 個圖層(Rotation ±3°)。建議先建控制NULL再套,避免跟其他旋轉表達式衝突。");
     }
 
     // ================= 3. 演出:說話 key =================
@@ -1145,10 +1218,45 @@
                 { child: "leg_up_L",  parent: BODY_NULL_NAME },
                 { child: "leg_up_R",  parent: BODY_NULL_NAME },
                 { child: "leg_low_L", parent: "leg_up_L" },
-                { child: "leg_low_R", parent: "leg_up_R" }
+                { child: "leg_low_R", parent: "leg_up_R" },
+                // 後援：手臂/腿沒有分上下段(只有一段)時,直接掛身體/全身NULL
+                // 必須放在分段規則之後 ── 已綁過的會因為已有 parent 而跳過
+                { child: "arm_L", parent: "body" },
+                { child: "arm_R", parent: "body" },
+                { child: "leg_L", parent: BODY_NULL_NAME },
+                { child: "leg_R", parent: BODY_NULL_NAME }
             ]
         }
     };
+
+    // 使用者自訂「骨架別名」：把圖層名稱前綴對應到骨架規則的 key(如 arm_L)。
+    // 解決命名跟規則對不上的問題(例如圖層叫「左手臂」而規則找的是 arm_L)。
+    var BONE_ALIAS_SEC = "CharacterPanel_BoneAlias";
+
+    function boneAliasLoad() {
+        var items = [];
+        try {
+            if (!app.settings.haveSetting(BONE_ALIAS_SEC, "count")) return [];
+            var n = parseInt(app.settings.getSetting(BONE_ALIAS_SEC, "count"), 10) || 0;
+            for (var i = 0; i < n; i++) {
+                items.push({
+                    pattern: decodeURIComponent(app.settings.getSetting(BONE_ALIAS_SEC, "pattern_" + i)),
+                    key:     decodeURIComponent(app.settings.getSetting(BONE_ALIAS_SEC, "key_" + i))
+                });
+            }
+        } catch (e) {}
+        return items;
+    }
+
+    function boneAliasSave(items) {
+        try {
+            app.settings.saveSetting(BONE_ALIAS_SEC, "count", String(items.length));
+            for (var i = 0; i < items.length; i++) {
+                app.settings.saveSetting(BONE_ALIAS_SEC, "pattern_" + i, encodeURIComponent(items[i].pattern));
+                app.settings.saveSetting(BONE_ALIAS_SEC, "key_" + i, encodeURIComponent(items[i].key));
+            }
+        } catch (e) {}
+    }
 
     // 用 prefix 比對:圖層名稱以 pattern 開頭(不分大小寫)就算符合
     function layerMatchesPattern(layerName, pattern) {
@@ -1160,6 +1268,20 @@
         var result = [];
         for (var i = 1; i <= comp.numLayers; i++) {
             if (layerMatchesPattern(comp.layer(i).name, pattern)) result.push(comp.layer(i));
+        }
+        return result;
+    }
+
+    // 收集符合骨架 key 的圖層:內建前綴比對 + 使用者自訂別名
+    function findLayersByBoneKey(comp, key) {
+        var result = findLayersByPrefix(comp, key);
+        var aliases = boneAliasLoad();
+        for (var i = 0; i < aliases.length; i++) {
+            if (aliases[i].key !== key) continue;
+            var extra = findLayersByPrefix(comp, aliases[i].pattern);
+            for (var j = 0; j < extra.length; j++) {
+                if (result.indexOf(extra[j]) === -1) result.push(extra[j]);
+            }
         }
         return result;
     }
@@ -1223,14 +1345,14 @@
 
             for (var c = 0; c < chains.length; c++) {
                 var rule = chains[c];
-                var children = findLayersByPrefix(comp, rule.child);
-                // 父圖層：全身NULL 用精確比對，其餘用前綴
+                var children = findLayersByBoneKey(comp, rule.child);
+                // 父圖層：全身NULL 用精確比對，其餘用前綴 + 使用者別名
                 var parents;
                 if (rule.parent === BODY_NULL_NAME) {
                     var bn = findLayer(comp, BODY_NULL_NAME);
                     parents = bn ? [bn] : [];
                 } else {
-                    parents = findLayersByPrefix(comp, rule.parent);
+                    parents = findLayersByBoneKey(comp, rule.parent);
                 }
 
                 if (children.length === 0) continue; // 此角色沒有這部位,跳過不算錯誤
@@ -1253,7 +1375,7 @@
             // 後援：沒有屁股圖層時，身體若還沒 parent，直接掛全身NULL
             if (preset.bodyNull) {
                 var bn2 = findLayer(comp, BODY_NULL_NAME);
-                var bodies = findLayersByPrefix(comp, "body");
+                var bodies = findLayersByBoneKey(comp, "body");
                 for (var b = 0; b < bodies.length; b++) {
                     if (bn2 && !bodies[b].parent && bodies[b] !== bn2) {
                         bodies[b].parent = bn2; linked++;
@@ -1374,6 +1496,12 @@
         };
         fullRigCheck = p1.add("checkbox", undefined, "完整綁定(建 face/eye/mouth/ear Null 並 parent)");
         fullRigCheck.value = false;
+
+        var rowFocus = p1.add("group");
+        var bFocus = rowFocus.add("button", undefined, "軸心聚焦(選中100%,其他25%)");
+        bFocus.preferredSize.width = 200;
+        bFocus.onClick = doFocusToggle;
+        rowFocus.add("statictext", undefined, "← 設軸心前按,選好下一個再按一次,完成後再按一次還原");
 
         // --- 命名 / 控制 NULL ---
         var p5 = makeTab("命名");
@@ -1517,10 +1645,55 @@
                   "  小腿(leg_low)→ 大腿\n" +
                   "  上臂(arm_up) → 身體\n" +
                   "  下臂(arm_low)→ 上臂\n" +
+                  "  單段手臂(arm_L/arm_R) → 身體(沒分上下臂時)\n" +
+                  "  單段腿(leg_L/leg_R)   → 全身NULL(沒分大小腿時)\n" +
                   "  頭(head)     → 身體\n\n" +
                   "沒有屁股圖層時,身體會直接掛全身NULL。\n" +
                   "先在命名頁把名稱轉成英文,再按此按鈕效果最佳。\n" +
-                  "已有 parent 的圖層不會被覆蓋。");
+                  "已有 parent 的圖層不會被覆蓋。\n\n" +
+                  "圖層名稱跟規則對不上?用下面的「綁定別名」\n" +
+                  "告訴面板你的某個前綴對應到哪個規則 key。");
+        };
+
+        // ── 綁定別名(使用者自訂命名 → 骨架規則 key)───────────
+        var rowAlias = p6.add("group");
+        var labAlias = rowAlias.add("statictext", undefined, "綁定別名:"); labAlias.preferredSize.width = 70;
+        var bAliasAdd = rowAlias.add("button", undefined, "+ 新增"); bAliasAdd.preferredSize.width = 70;
+        var bAliasDel = rowAlias.add("button", undefined, "− 刪除"); bAliasDel.preferredSize.width = 70;
+        var bAliasList = rowAlias.add("button", undefined, "清單"); bAliasList.preferredSize.width = 50;
+        bAliasAdd.onClick = function () {
+            var pattern = prompt("圖層名稱前綴(例如:左手臂):", "");
+            if (!pattern) return;
+            var key = prompt(
+                "對應到哪個骨架規則 key?\n" +
+                "常用:body / hip / head /\n" +
+                "arm_up_L / arm_up_R / arm_low_L / arm_low_R / arm_L / arm_R /\n" +
+                "leg_up_L / leg_up_R / leg_low_L / leg_low_R / leg_L / leg_R",
+                "arm_L");
+            if (!key) return;
+            var items = boneAliasLoad();
+            items.push({ pattern: pattern, key: key });
+            boneAliasSave(items);
+            showStatus("已新增綁定別名:「" + pattern + "」→ " + key);
+        };
+        bAliasDel.onClick = function () {
+            var pattern = prompt("要刪除的別名前綴:", ""); if (!pattern) return;
+            var items = boneAliasLoad();
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].pattern === pattern) {
+                    items.splice(i, 1); boneAliasSave(items);
+                    showStatus("已刪除綁定別名:「" + pattern + "」");
+                    return;
+                }
+            }
+            alert("找不到前綴「" + pattern + "」的別名。");
+        };
+        bAliasList.onClick = function () {
+            var items = boneAliasLoad();
+            if (items.length === 0) { alert("目前沒有自訂綁定別名。"); return; }
+            var lines = [];
+            for (var i = 0; i < items.length; i++) lines.push(items[i].pattern + " → " + items[i].key);
+            alert("目前的綁定別名:\n" + lines.join("\n"));
         };
 
         // ── Comp 裁切（標籤 + 兩步驟按鈕同列）──────────────────
@@ -1542,10 +1715,12 @@
         var bTalk  = rowC.add("button", undefined, "說話設定");   bTalk.preferredSize.width = 110;
         var bBr    = rowD.add("button", undefined, "呼吸(選取)"); bBr.preferredSize.width = 110;
         var bFl    = rowD.add("button", undefined, "漂浮(選取)"); bFl.preferredSize.width = 110;
+        var bSway  = rowD.add("button", undefined, "擺動(選取)"); bSway.preferredSize.width = 110;
         bBlink.onClick = doBlink;
         bTalk.onClick  = doTalkSetup;
         bBr.onClick    = doBreath;
         bFl.onClick    = doFloat;
+        bSway.onClick  = doSway;
 
         p2.add("statictext", undefined, "節奏(用數字調,不用憑感覺拉 key):");
         var rowRt = p2.add("group");
