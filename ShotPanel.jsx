@@ -176,33 +176,37 @@
         showStatus("已套 Overshoot 緩動(Position+Scale)。有彈跳感,輸出前確認看看。");
     }
 
-    // Solo 切換:Solo 選取圖層(取消其他圖層 solo),或全部取消 solo
-    var _soloCache = null;
+    // Solo 切換:Solo 選取圖層(取消其他圖層 solo),或還原。
+    // 快取存「圖層參考 + 所屬 comp」,避免換 comp 或增刪圖層後用 index 還原到錯的圖層。
+    var _soloCache = null; // { comp: CompItem, items: [{ layer, solo }] }
     function soloShot(on) {
         var comp = activeComp(); if (!comp) return;
         if (on) {
             var sel = comp.selectedLayers;
             if (sel.length === 0) { alert("先選取本鏡圖層,再按 Solo。"); return; }
-            _soloCache = [];
+            var items = [];
             for (var i = 1; i <= comp.numLayers; i++) {
                 var lay = comp.layer(i);
-                _soloCache.push({ idx: i, solo: lay.solo });
+                items.push({ layer: lay, solo: lay.solo });
                 lay.solo = false;
             }
+            _soloCache = { comp: comp, items: items };
             for (var j = 0; j < sel.length; j++) { try { sel[j].solo = true; } catch (e) {} }
             showStatus("Solo 本鏡(" + sel.length + " 個圖層)。按「還原 Solo」回到原狀。");
         } else {
-            if (_soloCache) {
-                for (var k = 0; k < _soloCache.length; k++) {
-                    try { comp.layer(_soloCache[k].idx).solo = _soloCache[k].solo; } catch (e) {}
+            // 只有快取屬於目前 comp 時才照原狀還原;否則只把目前 comp 的 solo 全清掉
+            if (_soloCache && _soloCache.comp === comp) {
+                for (var k = 0; k < _soloCache.items.length; k++) {
+                    try { _soloCache.items[k].layer.solo = _soloCache.items[k].solo; } catch (e) {}
                 }
                 _soloCache = null;
+                showStatus("已還原 Solo。");
             } else {
                 for (var m = 1; m <= comp.numLayers; m++) {
                     try { comp.layer(m).solo = false; } catch (e) {}
                 }
+                showStatus("已清除本合成所有 Solo。");
             }
-            showStatus("已還原 Solo。");
         }
     }
 
