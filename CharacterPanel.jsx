@@ -2247,11 +2247,11 @@
         // 若目前合成本身就有 control(無頭層結構),也可不選圖層直接鎖目前合成。
         // layerChain:從外層選取圖層往內、到含 control 那層之間的圖層串(外→內);空陣列=直接鎖目前合成。
         var lockedTarget = null; // { comp, layerChain:[...] }
-        var rowLock = p3.add("group");
-        var bLock = rowLock.add("button", undefined, "鎖定選取角色圖層"); bLock.preferredSize.width = 140;
-        var bUnlock = rowLock.add("button", undefined, "解除鎖定"); bUnlock.preferredSize.width = 80;
-        var lockLabel = rowLock.add("statictext", undefined, "(未鎖定,使用上面下拉選的角色)");
-        lockLabel.preferredSize.width = 260;
+        var rowLock = rowChar;   // 跟「角色」下拉同一列
+        var bLock = rowLock.add("button", undefined, "選取圖層"); bLock.preferredSize.width = 80;
+        var bUnlock = rowLock.add("button", undefined, "解除"); bUnlock.preferredSize.width = 50;
+        var lockLabel = rowLock.add("statictext", undefined, "(用左側下拉)");
+        lockLabel.preferredSize.width = 150;
         bLock.onClick = function () {
             var c = app.project.activeItem;
             if (!(c instanceof CompItem)) { alert("先點開外層合成,選取角色圖層再按此按鈕。"); return; }
@@ -2278,7 +2278,7 @@
         };
         bUnlock.onClick = function () {
             lockedTarget = null;
-            lockLabel.text = "(未鎖定,使用上面下拉選的角色)";
+            lockLabel.text = "(用左側下拉)";
         };
 
         // 鎖定的圖層串可能被使用者刪掉/換掉,存取前先確認最外層那個還活著。失效就自動解鎖。
@@ -2338,61 +2338,12 @@
             } finally { app.endUndoGroup(); }
         }
 
-        p3.add("statictext", undefined, "停在目前時間,點按鈕(不用進頭合成):");
         var rowT = p3.add("group");
+        rowT.add("statictext", undefined, "說話:");
         var bOn  = rowT.add("button", undefined, "▶ 開始說話"); bOn.preferredSize.width = 110;
         var bOff = rowT.add("button", undefined, "■ 停止說話"); bOff.preferredSize.width = 110;
         bOn.onClick  = function () { var tc = targetComp(); if (!tc) return; remoteKey("mouth", talkValue(tc)); };
         bOff.onClick = function () { remoteKey("mouth", 0); };
-
-        // 掃這個角色的 control,列出某滑桿目前每個數值各對應哪個圖層(表情/狀態)
-        function describeSliderValues(comp, sliderName) {
-            var map = {};
-            for (var i = 1; i <= comp.numLayers; i++) {
-                try {
-                    var op = opacityProp(comp.layer(i));
-                    if (!op.expressionEnabled) continue;
-                    var ex = op.expression;
-                    if (ex.indexOf('effect("' + sliderName + '")') === -1) continue;
-                    var m = ex.match(new RegExp("==\\s*(\\d+)"));
-                    if (!m) continue;
-                    if (!map[m[1]]) map[m[1]] = [];
-                    map[m[1]].push(comp.layer(i).name);
-                } catch (e) {}
-            }
-            var keys = [];
-            for (var k in map) if (map.hasOwnProperty(k)) keys.push(k);
-            keys.sort(function (a, b) { return parseInt(a, 10) - parseInt(b, 10); });
-            var lines = [];
-            for (var j = 0; j < keys.length; j++) lines.push(keys[j] + " → " + map[keys[j]].join("、"));
-            return lines;
-        }
-
-        p3.add("statictext", undefined, "通用滑桿:選角色 + 滑桿 + 值,按「下 HOLD key」在目前時間切換表情/狀態。");
-        var rowX = p3.add("group");
-        rowX.add("statictext", undefined, "滑桿:");
-        var SLD_ROLES = ["eye", "mouth", "眉", "emo"];
-        var sldDrop = rowX.add("dropdownlist", undefined, ["眼 eye", "嘴 mouth", "眉", "emo"]);
-        sldDrop.selection = 0;
-        rowX.add("statictext", undefined, "值:");
-        var valBox = rowX.add("edittext", undefined, "1");
-        valBox.preferredSize.width = 36;
-        var bKey = rowX.add("button", undefined, "下 HOLD key");
-        bKey.onClick = function () {
-            var v = parseFloat(valBox.text);
-            if (isNaN(v)) { alert("值要是數字。"); return; }
-            remoteKey(SLD_ROLES[sldDrop.selection.index], v);
-        };
-        var bSldInfo = rowX.add("button", undefined, "查表"); bSldInfo.preferredSize.width = 50;
-        bSldInfo.onClick = function () {
-            var tc = targetComp(); if (!tc) return;
-            var role = SLD_ROLES[sldDrop.selection.index];
-            var sliderName = sliderNameFor(tc, role);
-            var lines = describeSliderValues(tc, sliderName);
-            alert(lines.length === 0
-                ? "「" + sliderName + "」滑桿目前沒有任何圖層的不透明度跟它連動。"
-                : "「" + sliderName + "」滑桿的值對應(填到上面「值」欄):\n" + lines.join("\n"));
-        };
 
         // ── 演出快捷鍵(對「目前合成裡選取的圖層」下 key,在哪一層都能用)──────────────
         p3.add("statictext", undefined, "演出快捷鍵(嚇一跳/翻轉/閃爍):在任一合成選取圖層即可,沒選才用上面鎖定的角色:");
