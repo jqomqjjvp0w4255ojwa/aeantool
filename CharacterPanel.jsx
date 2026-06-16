@@ -2167,19 +2167,11 @@
         var bBr    = rowD.add("button", undefined, "呼吸(選取)"); bBr.preferredSize.width = 110;
         var bFl    = rowD.add("button", undefined, "漂浮(選取)"); bFl.preferredSize.width = 110;
         var bSway  = rowD.add("button", undefined, "擺動(選取)"); bSway.preferredSize.width = 110;
-        var rowW = p2.add("group");
-        rowW.add("statictext", undefined, "步態(打一組關鍵幀,自己複製接成整段,平移自己拉):").preferredSize.width = 320;
-        var bWalk = rowW.add("button", undefined, "走路循環"); bWalk.preferredSize.width = 110;
-        var bRun  = rowW.add("button", undefined, "跑步循環"); bRun.preferredSize.width = 110;
-        bWalk.helpTip = "在選取圖層 Position(上下彈)+Rotation(左右微傾)打一個步態循環的 key,可框選複製貼上接成整段。";
-        bRun.helpTip  = "同走路循環,彈跳更大、循環更快。";
         bBlink.onClick = doBlink;
         bTalk.onClick  = doTalkSetup;
         bBr.onClick    = doBreath;
         bFl.onClick    = doFloat;
         bSway.onClick  = doSway;
-        bWalk.onClick  = function () { doWalkCycle("走路"); };
-        bRun.onClick   = function () { doWalkCycle("跑步"); };
 
         p2.add("statictext", undefined, "節奏(用數字調,不用憑感覺拉 key):");
         var rowRt = p2.add("group");
@@ -2408,6 +2400,16 @@
         var bShock = rowShort.add("button", undefined, "嚇一跳"); bShock.preferredSize.width = 70;
         var bFlip  = rowShort.add("button", undefined, "左右翻轉"); bFlip.preferredSize.width = 70;
         var bFlash = rowShort.add("button", undefined, "閃爍"); bFlash.preferredSize.width = 70;
+
+        // 步態循環:打一組「上下浮動+左右微傾」關鍵幀,自己複製接成整段,平移自己拉
+        p3.add("statictext", undefined, "步態(打一組關鍵幀,框選複製接成整段,水平平移自己拉):");
+        var rowGait = p3.add("group");
+        var bWalk = rowGait.add("button", undefined, "走路循環"); bWalk.preferredSize.width = 110;
+        var bRun  = rowGait.add("button", undefined, "跑步循環"); bRun.preferredSize.width = 110;
+        bWalk.helpTip = "在選取圖層 Position(上下彈)+Rotation(左右微傾)打一個步態循環的 key,可框選複製貼上接成整段。";
+        bRun.helpTip  = "同走路循環,彈跳更大、循環更快。";
+        bWalk.onClick  = function () { doWalkCycle("走路"); };
+        bRun.onClick   = function () { doWalkCycle("跑步"); };
 
         // 取要套快捷鍵的圖層:優先用目前合成選取的圖層(可複選),沒選才退回已鎖定的角色層。
         function performTargets() {
