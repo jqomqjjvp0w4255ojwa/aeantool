@@ -579,6 +579,75 @@
             "重疊圖層會穿幫,不重疊時最佳。");
     }
 
+    // 複製單一屬性值(含關鍵影格 / 表達式)
+    function copyPropValue(sp, dp) {
+        if (!sp || !dp) return;
+        try {
+            if (sp.numKeys && sp.numKeys > 0) {
+                for (var k = 1; k <= sp.numKeys; k++) {
+                    try { dp.setValueAtTime(sp.keyTime(k), sp.keyValue(k)); } catch (e) {}
+                }
+            } else {
+                try { dp.setValue(sp.value); } catch (e) {}
+            }
+            try { if (sp.expression) dp.expression = sp.expression; } catch (e) {}
+        } catch (e) {}
+    }
+
+    // 同源套效果:以「選取的樣板圖層」為準,把它身上的效果套到全專案中
+    // 「來源(source)相同」的所有圖層(不是同名,是同一個來源 comp/素材)。
+    // 目標已有同名效果就更新其參數,否則新增,避免重複堆疊。
+    function applyEffectsToSameSource() {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length !== 1) { alert("只選「一個」已加好效果的樣板圖層,再按。"); return; }
+        var tmpl = sel[0];
+        var src = tmpl.source;
+        if (!src) { alert("樣板圖層沒有來源素材,無法判斷同源。"); return; }
+        var tFx = tmpl.property("ADBE Effect Parade");
+        if (!tFx || tFx.numProperties === 0) { alert("樣板圖層上沒有任何效果。"); return; }
+
+        app.beginUndoGroup("同源套效果");
+        var layers = 0, comps = 0;
+        try {
+            for (var ci = 1; ci <= app.project.numItems; ci++) {
+                var it = app.project.item(ci);
+                if (!(it instanceof CompItem)) continue;
+                var touched = false;
+                for (var li = 1; li <= it.numLayers; li++) {
+                    var L = it.layer(li);
+                    if (L === tmpl) continue;
+                    if (L.source !== src) continue;          // 關鍵:依來源比對,非名稱
+                    var dFx = L.property("ADBE Effect Parade");
+                    if (!dFx) continue;
+                    for (var fi = 1; fi <= tFx.numProperties; fi++) {
+                        var se = tFx.property(fi);
+                        // 目標已有同名效果就重用(更新),否則新增
+                        var de = null;
+                        for (var ei = 1; ei <= dFx.numProperties; ei++) {
+                            if (dFx.property(ei).name === se.name) { de = dFx.property(ei); break; }
+                        }
+                        if (!de) { try { de = dFx.addProperty(se.matchName); } catch (eA) { de = null; } }
+                        if (!de) continue;
+                        try { de.name = se.name; } catch (eN) {}
+                        try { de.enabled = se.enabled; } catch (eE) {}
+                        for (var pi = 1; pi <= se.numProperties; pi++) {
+                            var sp = se.property(pi);
+                            var dp = null;
+                            try { dp = de.property(sp.matchName); } catch (eP) {}
+                            if (!dp) { try { dp = de.property(pi); } catch (eP2) {} }
+                            copyPropValue(sp, dp);
+                        }
+                    }
+                    layers++; touched = true;
+                }
+                if (touched) comps++;
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已把樣板的 " + tFx.numProperties + " 個效果套到同源(來源:" + src.name +
+            ")的 " + layers + " 個圖層,跨 " + comps + " 個合成。樣板層本身不動。");
+    }
+
     // ================= UI =================
 
     function buildUI(thisObj) {
@@ -718,6 +787,11 @@
         rowClr.add("statictext", undefined, "效果:").preferredSize.width = 64;
         var bClr = rowClr.add("button", undefined, "清除選取圖層所有效果"); bClr.preferredSize.width = 180;
         bClr.onClick = clearEffects;
+        var rowSame = secLay.add("group");
+        rowSame.add("statictext", undefined, "同源:").preferredSize.width = 64;
+        var bSame = rowSame.add("button", undefined, "把效果套到所有同源圖層"); bSame.preferredSize.width = 180;
+        bSame.helpTip = "選一個加好效果的圖層→把效果套到全專案中來源相同的所有圖層(依來源比對,非同名)。";
+        bSame.onClick = applyEffectsToSameSource;
         var rowNull = secLay.add("group");
         rowNull.add("statictext", undefined, "拆解:").preferredSize.width = 64;
         var bNull = rowNull.add("button", undefined, "建預合成對齊 Null"); bNull.preferredSize.width = 160;
