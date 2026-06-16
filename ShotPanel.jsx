@@ -536,6 +536,49 @@
             "過場(" + durSec + "s)。整疊都吃得到,不用 precomp、不碰圖層透明度。");
     }
 
+    // 整疊淡出控制 Null:把選取圖層的 opacity 用表達式接到一顆 Null 的 opacity,
+    // 之後只要 keyframe 那顆 Null 就能讓整疊一起淡。並預設打好淡入/淡出 key。
+    // 注意:這跟逐層拉透明度本質相同,圖層重疊處仍會穿幫;不重疊時最好用。
+    function linkOpacityToNull() {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先選取整疊圖層,再按。"); return; }
+        app.beginUndoGroup("淡出控制 Null");
+        try {
+            // 取唯一名稱,避免表達式抓錯
+            var base = "淡出控制", nm = base, n = 1;
+            function nameUsed(x) { for (var i = 1; i <= comp.numLayers; i++) if (comp.layer(i).name === x) return true; return false; }
+            while (nameUsed(nm)) { nm = base + "_" + (++n); }
+
+            var ctrl = comp.layers.addNull();
+            ctrl.name = nm;
+            ctrl.moveToBeginning();
+
+            // 整疊範圍 → 給控制 Null 預設淡入/淡出 key(各 0.5s)
+            var tIn = Infinity, tOut = -Infinity;
+            for (var a = 0; a < sel.length; a++) {
+                if (sel[a].inPoint < tIn) tIn = sel[a].inPoint;
+                if (sel[a].outPoint > tOut) tOut = sel[a].outPoint;
+            }
+            var dur = Math.min(0.5, Math.max(0.01, (tOut - tIn) / 2));
+            var cop = ctrl.property("ADBE Transform Group").property("ADBE Opacity");
+            cop.setValueAtTime(tIn, 0);
+            cop.setValueAtTime(tIn + dur, 100);
+            cop.setValueAtTime(tOut - dur, 100);
+            cop.setValueAtTime(tOut, 0);
+            easyEaseProp(cop);
+
+            // 每層 opacity 接到控制 Null
+            var expr = 'thisComp.layer("' + nm + '").transform.opacity';
+            for (var i = 0; i < sel.length; i++) {
+                try { sel[i].property("ADBE Transform Group").property("ADBE Opacity").expression = expr; } catch (e) {}
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已建「" + nm + "」並把 " + sel.length +
+            " 層 opacity 接上(已預設淡入淡出)。改那顆 Null 的 opacity 即可控整疊。" +
+            "重疊圖層會穿幫,不重疊時最佳。");
+    }
+
     // ================= UI =================
 
     function buildUI(thisObj) {
@@ -657,12 +700,20 @@
         bFadeBoth.onClick = function () { addFade("both", 0.5); };
         var rowDip = secLay.add("group");
         rowDip.add("statictext", undefined, "過場:").preferredSize.width = 64;
-        var bDipB = rowDip.add("button", undefined, "淡黑"); bDipB.preferredSize.width = 56;
-        var bDipW = rowDip.add("button", undefined, "淡白"); bDipW.preferredSize.width = 56;
+        var bDipB = rowDip.add("button", undefined, "淡黑"); bDipB.preferredSize.width = 50;
+        var bDipW = rowDip.add("button", undefined, "淡白"); bDipW.preferredSize.width = 50;
+        var bFlash = rowDip.add("button", undefined, "閃白"); bFlash.preferredSize.width = 50;
         bDipB.helpTip = "在播放頭放黑色固態層,opacity 0→100→0。整疊一起淡黑→淡出,不用 precomp。";
         bDipW.helpTip = "同上,改用白色。";
-        bDipB.onClick = function () { dipTransition([0, 0, 0], 1.0); };
-        bDipW.onClick = function () { dipTransition([1, 1, 1], 1.0); };
+        bFlash.helpTip = "短促的白色閃光(0.3s),用在切換或強調。";
+        bDipB.onClick  = function () { dipTransition([0, 0, 0], 1.0); };
+        bDipW.onClick  = function () { dipTransition([1, 1, 1], 1.0); };
+        bFlash.onClick = function () { dipTransition([1, 1, 1], 0.3); };
+        var rowOpNull = secLay.add("group");
+        rowOpNull.add("statictext", undefined, "整疊淡:").preferredSize.width = 64;
+        var bOpNull = rowOpNull.add("button", undefined, "建淡出控制 Null"); bOpNull.preferredSize.width = 150;
+        bOpNull.helpTip = "選整疊→把每層 opacity 接到一顆 Null,改那顆即可控整疊(重疊處會穿幫)。";
+        bOpNull.onClick = linkOpacityToNull;
         var rowClr = secLay.add("group");
         rowClr.add("statictext", undefined, "效果:").preferredSize.width = 64;
         var bClr = rowClr.add("button", undefined, "清除選取圖層所有效果"); bClr.preferredSize.width = 180;
