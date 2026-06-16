@@ -881,6 +881,67 @@
         showStatus("已套擺動到 " + sel.length + " 個圖層(Rotation ±3°)。建議先建控制NULL再套,避免跟其他旋轉表達式衝突。");
     }
 
+    // 走路 / 跑步「上下浮動」:不套骨架,只在選取圖層的 Position(垂直彈跳)
+    // 加上 Rotation(左右微傾)打出「一個完整步態循環」的關鍵幀,讓你自己複製貼上接成整段,
+    // 平移由你自己拉。一個循環 = 兩步(身體上下彈兩次)。
+    //   走路:循環 0.7s、彈跳 8px、左右傾 1.5°
+    //   跑步:循環 0.45s、彈跳 18px、左右傾 3°
+    function doWalkCycle(kind) {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先選取角色(身體或整體 Null)再按「" + kind + "」。"); return; }
+        var run = (kind === "跑步");
+        var cycleDur = run ? 0.45 : 0.7;   // 一個步態循環長度(秒)
+        var bobAmp   = run ? 18 : 8;        // 垂直彈跳幅度(px,往上)
+        var tilt     = run ? 3 : 1.5;       // 左右微傾幅度(度)
+        // 一個循環取 5 個取樣點:谷-峰-谷-峰-谷(兩步、兩次彈跳),首尾相同可無縫接續
+        var us   = [0,    0.25,  0.5,  0.75, 1];
+        var bob  = [0,    1,     0,    1,    0];     // 0=低(著地)、1=高(騰空)
+        var lean = [0,    1,     0,   -1,    0];     // 左右交替傾斜
+        app.beginUndoGroup(kind + "循環");
+        try {
+            for (var i = 0; i < sel.length; i++) {
+                var t0 = comp.time;
+                var pos = sel[i].property("ADBE Transform Group").property("ADBE Position");
+                var rot = sel[i].property("ADBE Transform Group").property("ADBE Rotate Z");
+                var base = pos.valueAtTime(t0, false);
+                var rBase = rot.valueAtTime(t0, false);
+                for (var k = 0; k < us.length; k++) {
+                    var t = t0 + us[k] * cycleDur;
+                    var v = base.slice();
+                    v[1] = base[1] - bobAmp * bob[k];   // 往上彈
+                    pos.setValueAtTime(t, v);
+                    rot.setValueAtTime(t, rBase + tilt * lean[k]);
+                }
+                easyEaseRange(pos, t0, t0 + cycleDur);
+                easyEaseRange(rot, t0, t0 + cycleDur);
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已在 " + sel.length + " 個圖層打上一個「" + kind + "」步態循環(" + cycleDur +
+            "s,上下 " + bobAmp + "px、左右 ±" + tilt + "°)。在時間軸框選這組 key 複製貼上即可接成整段;" +
+            "平移自己拉。要無縫循環可在屬性上加 loopOut() 表達式。");
+    }
+
+    // 給某屬性在 [t0, t1] 範圍內的所有 key 套 Easy Ease
+    function easyEaseRange(prop, t0, t1) {
+        try {
+            var dims = 1;
+            try { dims = prop.value.length || 1; } catch (eD) { dims = 1; }
+            for (var k = 1; k <= prop.numKeys; k++) {
+                var kt = prop.keyTime(k);
+                if (kt < t0 - 0.0001 || kt > t1 + 0.0001) continue;
+                var inE = [], outE = [];
+                for (var d = 0; d < dims; d++) {
+                    inE.push(new KeyframeEase(0, 33.3333));
+                    outE.push(new KeyframeEase(0, 33.3333));
+                }
+                prop.setInterpolationTypeAtKey(k,
+                    KeyframeInterpolationType.BEZIER, KeyframeInterpolationType.BEZIER);
+                prop.setTemporalEaseAtKey(k, inE, outE);
+            }
+        } catch (e) {}
+    }
+
     // ================= 4. 表達式工具 =================
 
     var PROP_CHOICES = [
@@ -2106,11 +2167,19 @@
         var bBr    = rowD.add("button", undefined, "呼吸(選取)"); bBr.preferredSize.width = 110;
         var bFl    = rowD.add("button", undefined, "漂浮(選取)"); bFl.preferredSize.width = 110;
         var bSway  = rowD.add("button", undefined, "擺動(選取)"); bSway.preferredSize.width = 110;
+        var rowW = p2.add("group");
+        rowW.add("statictext", undefined, "步態(打一組關鍵幀,自己複製接成整段,平移自己拉):").preferredSize.width = 320;
+        var bWalk = rowW.add("button", undefined, "走路循環"); bWalk.preferredSize.width = 110;
+        var bRun  = rowW.add("button", undefined, "跑步循環"); bRun.preferredSize.width = 110;
+        bWalk.helpTip = "在選取圖層 Position(上下彈)+Rotation(左右微傾)打一個步態循環的 key,可框選複製貼上接成整段。";
+        bRun.helpTip  = "同走路循環,彈跳更大、循環更快。";
         bBlink.onClick = doBlink;
         bTalk.onClick  = doTalkSetup;
         bBr.onClick    = doBreath;
         bFl.onClick    = doFloat;
         bSway.onClick  = doSway;
+        bWalk.onClick  = function () { doWalkCycle("走路"); };
+        bRun.onClick   = function () { doWalkCycle("跑步"); };
 
         p2.add("statictext", undefined, "節奏(用數字調,不用憑感覺拉 key):");
         var rowRt = p2.add("group");
