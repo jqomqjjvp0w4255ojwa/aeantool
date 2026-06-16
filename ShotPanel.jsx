@@ -509,6 +509,33 @@
             "(注意:不透明度、混合模式、效果不會經由 Null 繼承)");
     }
 
+    // 淡黑/淡白過場(dip):在播放頭放一片固態色蓋全畫面,opacity 0→100→0。
+    // 不用 precomp、不碰任何圖層透明度,整疊都吃得到。前段淡到色、後段從色淡出。
+    // rgb 例:[0,0,0] 黑、[1,1,1] 白。durSec = 整段過場長度(前後各半)。
+    function dipTransition(rgb, durSec) {
+        var comp = activeComp(); if (!comp) return;
+        var t = comp.time;
+        var half = durSec / 2;
+        var start = Math.max(0, t - half);
+        var end = Math.min(comp.duration, t + half);
+        app.beginUndoGroup("淡色過場");
+        try {
+            var name = (rgb[0] >= 0.5 ? "淡白過場" : "淡黑過場");
+            var solid = comp.layers.addSolid(rgb, name, comp.width, comp.height, 1);
+            solid.moveToBeginning();           // 蓋在最上層
+            solid.startTime = start;
+            solid.inPoint = start;
+            solid.outPoint = end;
+            var op = solid.property("ADBE Transform Group").property("ADBE Opacity");
+            op.setValueAtTime(start, 0);
+            op.setValueAtTime(t, 100);
+            op.setValueAtTime(end, 0);
+            easyEaseProp(op);
+        } finally { app.endUndoGroup(); }
+        showStatus("已在 " + t.toFixed(2) + "s 加" + (rgb[0] >= 0.5 ? "淡白" : "淡黑") +
+            "過場(" + durSec + "s)。整疊都吃得到,不用 precomp、不碰圖層透明度。");
+    }
+
     // ================= UI =================
 
     function buildUI(thisObj) {
@@ -628,6 +655,14 @@
         bFadeIn.onClick   = function () { addFade("in",   0.5); };
         bFadeOut.onClick  = function () { addFade("out",  0.5); };
         bFadeBoth.onClick = function () { addFade("both", 0.5); };
+        var rowDip = secLay.add("group");
+        rowDip.add("statictext", undefined, "過場:").preferredSize.width = 64;
+        var bDipB = rowDip.add("button", undefined, "淡黑"); bDipB.preferredSize.width = 56;
+        var bDipW = rowDip.add("button", undefined, "淡白"); bDipW.preferredSize.width = 56;
+        bDipB.helpTip = "在播放頭放黑色固態層,opacity 0→100→0。整疊一起淡黑→淡出,不用 precomp。";
+        bDipW.helpTip = "同上,改用白色。";
+        bDipB.onClick = function () { dipTransition([0, 0, 0], 1.0); };
+        bDipW.onClick = function () { dipTransition([1, 1, 1], 1.0); };
         var rowClr = secLay.add("group");
         rowClr.add("statictext", undefined, "效果:").preferredSize.width = 64;
         var bClr = rowClr.add("button", undefined, "清除選取圖層所有效果"); bClr.preferredSize.width = 180;
