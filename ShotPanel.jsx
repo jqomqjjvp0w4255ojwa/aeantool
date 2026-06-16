@@ -101,6 +101,111 @@
         showStatus("已套「慢" + kind + "」微運鏡(目前時間 → 鏡頭出點),已套緩動。");
     }
 
+    // 鏡頭抖動:在選取圖層的 Position 上打幾個隨機小偏移 key,模擬手持。
+    // 抖動範圍 ±shakePx px,每 stepSec 秒一個 key,持續 durSec 秒。
+    function camShake(shakePx, stepSec, durSec) {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先選取鏡頭層(BG/Null),再按抖動。"); return; }
+        app.beginUndoGroup("鏡頭抖動");
+        try {
+            for (var i = 0; i < sel.length; i++) {
+                var p = posProp(sel[i]);
+                var t0 = comp.time;
+                var base = p.valueAtTime(t0, false);
+                var steps = Math.max(2, Math.round(durSec / stepSec));
+                for (var k = 0; k <= steps; k++) {
+                    var t = t0 + k * stepSec;
+                    var dx = (k === 0 || k === steps) ? 0 : (Math.random() * 2 - 1) * shakePx;
+                    var dy = (k === 0 || k === steps) ? 0 : (Math.random() * 2 - 1) * shakePx;
+                    var v = base.slice();
+                    v[0] = base[0] + dx; v[1] = base[1] + dy;
+                    p.setValueAtTime(t, v);
+                }
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已加入鏡頭抖動(" + durSec + "s,±" + shakePx + "px)。可 Ctrl+Z 整組撤銷。");
+    }
+
+    // Overshoot 緩動:把選取鏡頭層 Position+Scale 已有的 key 換成帶彈跳的緩動
+    // 做法:Easy Ease 基礎上,把「影響力」拉高(influence=80~90),讓緩出更猛、緩入更慢
+    // 並在最後一個 key 之前插入一個小的 overshoot key。
+    function applyOvershoot() {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先選取鏡頭層,再按 Overshoot。"); return; }
+        app.beginUndoGroup("Overshoot 緩動");
+        try {
+            for (var i = 0; i < sel.length; i++) {
+                var props = [posProp(sel[i]), scaleProp(sel[i])];
+                for (var pi = 0; pi < props.length; pi++) {
+                    var prop = props[pi];
+                    var n = prop.numKeys;
+                    if (n < 2) continue;
+                    // 在倒數第二個 key 和最後一個 key 之間插入 overshoot key
+                    var tLast = prop.keyTime(n);
+                    var tPrev = prop.keyTime(n - 1);
+                    var tOver = tLast - (tLast - tPrev) * 0.15; // 距離終點 15% 處
+                    var vLast = prop.valueAtTime(tLast, false);
+                    var vPrev = prop.valueAtTime(tPrev, false);
+                    // overshoot 值:稍微超過終點值
+                    var vOver = vLast.slice ? vLast.slice() : [vLast];
+                    var vL2   = vLast.slice ? vLast.slice() : [vLast];
+                    var vP2   = vPrev.slice ? vPrev.slice() : [vPrev];
+                    for (var di = 0; di < vOver.length; di++) {
+                        vOver[di] = vL2[di] + (vL2[di] - vP2[di]) * 0.06;
+                    }
+                    prop.setValueAtTime(tOver, vOver.length === 1 ? vOver[0] : vOver);
+                    // 把所有 key 套強力緩動(influence 80)
+                    var n2 = prop.numKeys;
+                    for (var k = 1; k <= n2; k++) {
+                        var dims = 1;
+                        try { dims = prop.value.length || 1; } catch (eD) { dims = 1; }
+                        var inE = [], outE = [];
+                        for (var d = 0; d < dims; d++) {
+                            inE.push(new KeyframeEase(0, 80));
+                            outE.push(new KeyframeEase(0, 80));
+                        }
+                        prop.setInterpolationTypeAtKey(k,
+                            KeyframeInterpolationType.BEZIER, KeyframeInterpolationType.BEZIER);
+                        try { prop.setTemporalEaseAtKey(k, inE, outE); } catch (eE) {}
+                    }
+                }
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已套 Overshoot 緩動(Position+Scale)。有彈跳感,輸出前確認看看。");
+    }
+
+    // Solo 切換:Solo 選取圖層(取消其他圖層 solo),或全部取消 solo
+    var _soloCache = null;
+    function soloShot(on) {
+        var comp = activeComp(); if (!comp) return;
+        if (on) {
+            var sel = comp.selectedLayers;
+            if (sel.length === 0) { alert("先選取本鏡圖層,再按 Solo。"); return; }
+            _soloCache = [];
+            for (var i = 1; i <= comp.numLayers; i++) {
+                var lay = comp.layer(i);
+                _soloCache.push({ idx: i, solo: lay.solo });
+                lay.solo = false;
+            }
+            for (var j = 0; j < sel.length; j++) { try { sel[j].solo = true; } catch (e) {} }
+            showStatus("Solo 本鏡(" + sel.length + " 個圖層)。按「還原 Solo」回到原狀。");
+        } else {
+            if (_soloCache) {
+                for (var k = 0; k < _soloCache.length; k++) {
+                    try { comp.layer(_soloCache[k].idx).solo = _soloCache[k].solo; } catch (e) {}
+                }
+                _soloCache = null;
+            } else {
+                for (var m = 1; m <= comp.numLayers; m++) {
+                    try { comp.layer(m).solo = false; } catch (e) {}
+                }
+            }
+            showStatus("已還原 Solo。");
+        }
+    }
+
     // ================= 切鏡 =================
 
     // 在「播放頭 / 下個標記」把選取的整疊圖層切成兩鏡:
@@ -171,9 +276,14 @@
             for (var u = 1; u <= comp.numLayers; u++) comp.layer(u).selected = false;
             for (var v = 0; v < pairs.length; v++) pairs[v].dup.selected = true;
             comp.time = T;
+            // 自動把工作區框到新鏡(入點=切點,出點=新整疊最大出點),按 0 即可預覽
+            var newEnd = T;
+            for (var w = 0; w < pairs.length; w++) {
+                try { if (pairs[w].dup.outPoint > newEnd) newEnd = pairs[w].dup.outPoint; } catch (eW) {}
+            }
+            try { comp.workAreaStart = T; comp.workAreaDuration = Math.max(0.1, newEnd - T); } catch (eWA) {}
         } finally { app.endUndoGroup(); }
-        showStatus("已在 " + T.toFixed(2) + "s 切鏡:複製 " + sel.length +
-            " 個圖層集中排到上方,新整疊已選起。前段留原圖層、後段為新圖層。");
+        showStatus("已在 " + T.toFixed(2) + "s 切鏡,新整疊排上方已選起;工作區已框到新鏡,按 0 預覽。");
     }
 
     // 在目前時間下一個標記,完全不靠鍵盤(避開中文輸入法吃掉 * 的問題)。
@@ -348,6 +458,14 @@
         bPull.onClick = function () { camPreset("拉"); };
         bPanL.onClick = function () { camPreset("左"); };
         bPanR.onClick = function () { camPreset("右"); };
+        var rowCam3 = secCam.add("group");
+        rowCam3.add("statictext", undefined, "進階:").preferredSize.width = 56;
+        var bShake = rowCam3.add("button", undefined, "抖動"); bShake.preferredSize.width = 56;
+        var bOver  = rowCam3.add("button", undefined, "Overshoot"); bOver.preferredSize.width = 90;
+        bShake.helpTip = "在播放頭起 1 秒內打抖動 key(±8px),適合強調鏡頭。";
+        bOver.helpTip  = "把現有 Position+Scale key 換成帶彈跳的強力緩動。";
+        bShake.onClick = function () { camShake(8, 0.08, 1.0); };
+        bOver.onClick  = function () { applyOvershoot(); };
 
         // ── 切鏡 ──
         var secCut = section("切鏡");
@@ -390,6 +508,14 @@
         var bWAFull = rowWA.add("button", undefined, "還原全片"); bWAFull.preferredSize.width = 90;
         bWA.onClick = shotToWorkArea;
         bWAFull.onClick = fullWorkArea;
+        var rowSolo = secPv.add("group");
+        rowSolo.add("statictext", undefined, "Solo:").preferredSize.width = 56;
+        var bSolo    = rowSolo.add("button", undefined, "Solo 本鏡");  bSolo.preferredSize.width = 100;
+        var bSoloOff = rowSolo.add("button", undefined, "還原 Solo");  bSoloOff.preferredSize.width = 90;
+        bSolo.helpTip    = "Solo 選取圖層,其他全部取消 Solo。";
+        bSoloOff.helpTip = "還原所有圖層的 Solo 狀態。";
+        bSolo.onClick    = function () { soloShot(true); };
+        bSoloOff.onClick = function () { soloShot(false); };
 
         var rowPx = secPv.add("group");
         rowPx.add("statictext", undefined, "代理:").preferredSize.width = 56;
