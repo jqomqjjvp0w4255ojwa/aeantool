@@ -547,11 +547,15 @@
                     try { tg.property(n3[j]).setValue(stg.property(n3[j]).valueAtTime(t, false)); } catch (e) {}
                 }
             }
+            // 把 Null 放到原預合成圖層正上方(addNull 預設會跑到最上層)
+            try { nul.moveBefore(src); } catch (em) {}
+            // 只留 Null 被選取,方便接著操作
+            for (var s = 0; s < sel.length; s++) { sel[s].selected = false; }
             nul.selected = true;
         } finally { app.endUndoGroup(); }
-        showStatus("已建「" + (nul ? nul.name : "對齊 Null") + "」。" +
+        showStatus("已建「" + (nul ? nul.name : "對齊 Null") + "」於原圖層上方。" +
             "做法:進預合成複製內層→回主合成貼上→全選貼好的圖層,parent 到這顆 Null,位置就會吻合。" +
-            "(注意:不透明度、混合模式、效果不會經由 Null 繼承)");
+            "(AE 腳本無法跨合成搬圖層,只能用 Null 對齊+手動貼上;不透明度、混合模式、效果不會經由 Null 繼承)");
     }
 
     // 淡黑/淡白過場(dip):在播放頭放一片固態色蓋全畫面,opacity 0→100→0。
