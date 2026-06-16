@@ -422,6 +422,93 @@
         showStatus("已把 " + n + " 個來源的代理切到「" + (use ? "開(輕量預覽)" : "關(原圖)") + "」。");
     }
 
+    // ================= 圖層工具 =================
+
+    // 一鍵清除選取圖層上的所有效果
+    function clearEffects() {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先選取要清效果的圖層,再按。"); return; }
+        app.beginUndoGroup("清除效果");
+        var removed = 0;
+        try {
+            for (var i = 0; i < sel.length; i++) {
+                var fx;
+                try { fx = sel[i].property("ADBE Effect Parade"); } catch (eP) { fx = null; }
+                if (!fx) continue;
+                // 由後往前刪,避免 index 位移
+                for (var f = fx.numProperties; f >= 1; f--) {
+                    try { fx.property(f).remove(); removed++; } catch (eR) {}
+                }
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已清除 " + removed + " 個效果(" + sel.length + " 個圖層)。");
+    }
+
+    // 淡入 / 淡出:在選取圖層的 Opacity 上補關鍵影格,並套緩入緩出。
+    // mode: "in" 入點起淡入、"out" 出點前淡出、"both" 兩端都做。durSec 為過場長度。
+    function addFade(mode, durSec) {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先選取要淡入/淡出的圖層,再按。"); return; }
+        app.beginUndoGroup("淡入淡出:" + mode);
+        try {
+            for (var i = 0; i < sel.length; i++) {
+                var op = sel[i].property("ADBE Transform Group").property("ADBE Opacity");
+                if (!op) continue;
+                var tIn = sel[i].inPoint, tOut = sel[i].outPoint;
+                var dur = Math.min(durSec, Math.max(0.01, (tOut - tIn) / 2));
+                if (mode === "in" || mode === "both") {
+                    op.setValueAtTime(tIn, 0);
+                    op.setValueAtTime(tIn + dur, 100);
+                }
+                if (mode === "out" || mode === "both") {
+                    op.setValueAtTime(tOut - dur, 100);
+                    op.setValueAtTime(tOut, 0);
+                }
+                easyEaseProp(op);
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已套" + (mode === "in" ? "淡入" : mode === "out" ? "淡出" : "淡入淡出") +
+            "(" + durSec + "s," + sel.length + " 個圖層)。");
+    }
+
+    // 拆解輔助:對選取的「預合成圖層」建一顆 Null,完全複製它的位置/縮放/旋轉/錨點。
+    // 之後把預合成裡的內層圖層複製→貼到主合成→全選 parent 到這顆 Null,
+    // 內層就會維持原本在畫面上的位置(不位移)。
+    function makeCompensationNull() {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length !== 1) { alert("只選「一個」預合成圖層,再按。"); return; }
+        var src = sel[0];
+        app.beginUndoGroup("建立對齊 Null");
+        var nul;
+        try {
+            nul = comp.layers.addNull();
+            nul.name = "對齊_" + src.name;
+            var tg = nul.property("ADBE Transform Group");
+            var stg = src.property("ADBE Transform Group");
+            // 逐項複製(用目前時間的值,避免被 key 影響)
+            var t = comp.time;
+            var names = ["ADBE Anchor Point", "ADBE Position", "ADBE Scale", "ADBE Rotate Z"];
+            for (var i = 0; i < names.length; i++) {
+                try { tg.property(names[i]).setValue(stg.property(names[i]).valueAtTime(t, false)); } catch (e) {}
+            }
+            // 3D 圖層的話補方向/X/Y 旋轉
+            if (src.threeDLayer) {
+                try { nul.threeDLayer = true; } catch (e3) {}
+                var n3 = ["ADBE Orientation", "ADBE Rotate X", "ADBE Rotate Y"];
+                for (var j = 0; j < n3.length; j++) {
+                    try { tg.property(n3[j]).setValue(stg.property(n3[j]).valueAtTime(t, false)); } catch (e) {}
+                }
+            }
+            nul.selected = true;
+        } finally { app.endUndoGroup(); }
+        showStatus("已建「" + (nul ? nul.name : "對齊 Null") + "」。" +
+            "做法:進預合成複製內層→回主合成貼上→全選貼好的圖層,parent 到這顆 Null,位置就會吻合。" +
+            "(注意:不透明度、混合模式、效果不會經由 Null 繼承)");
+    }
+
     // ================= UI =================
 
     function buildUI(thisObj) {
@@ -530,6 +617,27 @@
         bPxOff.onClick  = function () { toggleProxyUse(false); };
         bPxOn.onClick   = function () { toggleProxyUse(true); };
         secPv.add("statictext", undefined, "代理只給「不會動的大插圖」;會動的(眨眼/嘴)套了會凍結");
+
+        // ── 圖層工具 ──
+        var secLay = section("圖層");
+        var rowFade = secLay.add("group");
+        rowFade.add("statictext", undefined, "淡入淡出:").preferredSize.width = 64;
+        var bFadeIn   = rowFade.add("button", undefined, "淡入");   bFadeIn.preferredSize.width = 56;
+        var bFadeOut  = rowFade.add("button", undefined, "淡出");   bFadeOut.preferredSize.width = 56;
+        var bFadeBoth = rowFade.add("button", undefined, "兩端");   bFadeBoth.preferredSize.width = 56;
+        bFadeIn.onClick   = function () { addFade("in",   0.5); };
+        bFadeOut.onClick  = function () { addFade("out",  0.5); };
+        bFadeBoth.onClick = function () { addFade("both", 0.5); };
+        var rowClr = secLay.add("group");
+        rowClr.add("statictext", undefined, "效果:").preferredSize.width = 64;
+        var bClr = rowClr.add("button", undefined, "清除選取圖層所有效果"); bClr.preferredSize.width = 180;
+        bClr.onClick = clearEffects;
+        var rowNull = secLay.add("group");
+        rowNull.add("statictext", undefined, "拆解:").preferredSize.width = 64;
+        var bNull = rowNull.add("button", undefined, "建預合成對齊 Null"); bNull.preferredSize.width = 160;
+        bNull.helpTip = "選一個預合成圖層→建 Null 複製其變換。再把內層貼到主合成、parent 到此 Null,位置不位移。";
+        bNull.onClick = makeCompensationNull;
+        secLay.add("statictext", undefined, "拆解預合成:建 Null→內層 parent 到它,即可不位移搬到主合成");
 
         tabs.selection = secCam;
 
