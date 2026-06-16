@@ -103,88 +103,77 @@
 
     // ================= 切鏡 =================
 
-    // 一鍵切下一鏡:複製選取的整疊圖層(保留彼此父子關係),整段移到「本鏡結尾 → 下個標記」。
-    // markerSrc: "comp" 用合成標記;"audio" 用選取音檔圖層上的 marker。
-    function cutNextShot(markerSrc) {
+    // 在「播放頭 / 下個標記」把選取的整疊圖層切成兩鏡:
+    //   原圖層出點 = 切點(前一鏡到此結束)
+    //   複製出的新圖層入點 = 切點(後一鏡從此開始),且整疊集中移到原圖層上方
+    // 不會「舊新舊新」交錯,複製出的整疊會排在一起。
+    // useMarker=false:切在播放頭;true:切在播放頭之後最近的標記(markerSrc 決定來源)。
+    function cutShot(useMarker, markerSrc) {
         var comp = activeComp(); if (!comp) return;
         var sel = comp.selectedLayers;
-        if (sel.length === 0) { alert("先選取目前這一鏡的整疊圖層(可全選),再按「切下一鏡」。"); return; }
+        if (sel.length === 0) { alert("先選取要切的整疊圖層(可全選),再按。"); return; }
 
-        // 本鏡範圍 = 選取圖層的最小入點 / 最大出點
-        var shotEnd = -Infinity, shotStart = Infinity;
-        for (var a = 0; a < sel.length; a++) {
-            if (sel[a].outPoint > shotEnd) shotEnd = sel[a].outPoint;
-            if (sel[a].inPoint < shotStart) shotStart = sel[a].inPoint;
-        }
-
-        // 找「shotEnd 之後最近的標記」
-        var nextMark = null;
-        function scanMarkers(mp) {
-            try {
-                for (var m = 1; m <= mp.numKeys; m++) {
-                    var mt = mp.keyTime(m);
-                    if (mt > shotEnd + 0.001 && (nextMark === null || mt < nextMark)) nextMark = mt;
-                }
-            } catch (e) {}
-        }
-        if (markerSrc === "audio") {
-            // 用選取圖層裡找到的第一個有 marker 的圖層(通常是音檔)
-            for (var s = 0; s < sel.length; s++) {
+        var T = comp.time;
+        if (useMarker) {
+            var nextMark = null;
+            function scanMarkers(mp) {
                 try {
-                    var lm = sel[s].property("ADBE Marker");
-                    if (lm && lm.numKeys > 0) scanMarkers(lm);
-                } catch (eL) {}
+                    for (var m = 1; m <= mp.numKeys; m++) {
+                        var mt = mp.keyTime(m);
+                        if (mt > T + 0.001 && (nextMark === null || mt < nextMark)) nextMark = mt;
+                    }
+                } catch (e) {}
             }
-            // 選取裡沒 marker → 掃整個 comp 所有圖層的 marker
-            if (nextMark === null) {
-                for (var li = 1; li <= comp.numLayers; li++) {
-                    try {
-                        var lm2 = comp.layer(li).property("ADBE Marker");
-                        if (lm2 && lm2.numKeys > 0) scanMarkers(lm2);
-                    } catch (eL2) {}
+            if (markerSrc === "audio") {
+                for (var s = 0; s < sel.length; s++) {
+                    try { var lm = sel[s].property("ADBE Marker"); if (lm && lm.numKeys > 0) scanMarkers(lm); } catch (eL) {}
                 }
+                if (nextMark === null) {
+                    for (var li = 1; li <= comp.numLayers; li++) {
+                        try { var lm2 = comp.layer(li).property("ADBE Marker"); if (lm2 && lm2.numKeys > 0) scanMarkers(lm2); } catch (eL2) {}
+                    }
+                }
+            } else {
+                scanMarkers(comp.markerProperty);
             }
-        } else {
-            scanMarkers(comp.markerProperty);
+            if (nextMark === null) { alert("播放頭之後找不到標記。先下標記,或改用「切在播放頭」。"); return; }
+            T = nextMark;
         }
 
-        var newStart = shotEnd;
-        var newEnd = (nextMark !== null) ? nextMark : shotEnd + (shotEnd - shotStart);
+        // 依圖層順序(index 小→大,上→下)排序,確保複製出的整疊維持原本上下關係
+        var ordered = sel.slice().sort(function (a, b) { return a.index - b.index; });
 
-        app.beginUndoGroup("切下一鏡");
+        app.beginUndoGroup("切鏡");
         try {
-            // 先全部複製,建立 原圖層 → 新圖層 對照(用來重連內部父子)
+            // 複製,建立 原→新 對照(用來重連內部父子)
             var pairs = [];
-            for (var i = 0; i < sel.length; i++) {
-                pairs.push({ orig: sel[i], dup: sel[i].duplicate() });
+            for (var i = 0; i < ordered.length; i++) {
+                pairs.push({ orig: ordered[i], dup: ordered[i].duplicate() });
             }
             // 內部父子重連:原本 parent 也在選取群裡 → 改指到對應的新圖層
             for (var j = 0; j < pairs.length; j++) {
-                var origParent = pairs[j].orig.parent;
-                if (!origParent) continue;
+                var op = pairs[j].orig.parent;
+                if (!op) continue;
                 for (var q = 0; q < pairs.length; q++) {
-                    if (pairs[q].orig === origParent) { pairs[j].dup.parent = pairs[q].dup; break; }
+                    if (pairs[q].orig === op) { pairs[j].dup.parent = pairs[q].dup; break; }
                 }
             }
-            // 整段平移到 newStart,並把出點收到 newEnd
-            var delta = newStart - shotStart;
-            var newSel = [];
+            // 切點:原圖層收到切點前、新圖層從切點起
+            var topOrig = pairs[0].orig; // index 最小的原圖層(最上面)
             for (var d = 0; d < pairs.length; d++) {
-                var L = pairs[d].dup;
-                try { L.startTime += delta; } catch (eS) {}
-                try { if (L.outPoint > newEnd) L.outPoint = newEnd; } catch (eO) {}
-                try { if (L.inPoint < newStart) L.inPoint = newStart; } catch (eI) {}
-                newSel.push(L);
+                var O = pairs[d].orig, N = pairs[d].dup;
+                try { if (O.inPoint < T && O.outPoint > T) O.outPoint = T; } catch (eO) {}
+                try { if (N.outPoint > T && N.inPoint < T) N.inPoint = T; } catch (eN) {}
+                // 把新圖層集中移到原整疊上方(依序,維持彼此順序)
+                try { N.moveBefore(topOrig); } catch (eM) {}
             }
-            // 選起新鏡頭、把時間移到新鏡開頭,方便接著運鏡
+            // 選起新整疊、播放頭移到切點,接著就能運鏡
             for (var u = 1; u <= comp.numLayers; u++) comp.layer(u).selected = false;
-            for (var v = 0; v < newSel.length; v++) newSel[v].selected = true;
-            comp.time = newStart;
+            for (var v = 0; v < pairs.length; v++) pairs[v].dup.selected = true;
+            comp.time = T;
         } finally { app.endUndoGroup(); }
-        showStatus("已切下一鏡:複製 " + sel.length + " 個圖層 → " +
-            newStart.toFixed(2) + "s ~ " + newEnd.toFixed(2) + "s" +
-            (nextMark !== null ? "(對齊下個標記)" : "(找不到標記,沿用本鏡長度)") +
-            "。新鏡已選起,直接運鏡即可。");
+        showStatus("已在 " + T.toFixed(2) + "s 切鏡:複製 " + sel.length +
+            " 個圖層集中排到上方,新整疊已選起。前段留原圖層、後段為新圖層。");
     }
 
     // 在目前時間下一個標記,完全不靠鍵盤(避開中文輸入法吃掉 * 的問題)。
@@ -229,6 +218,13 @@
         } finally { app.endUndoGroup(); }
         showStatus("工作區已框到本鏡(" + comp.workAreaStart.toFixed(2) + "s ~ " +
             (comp.workAreaStart + comp.workAreaDuration).toFixed(2) + "s)。按數字 0 只預覽這一鏡。");
+    }
+
+    // 工作區還原成整段(全片)
+    function fullWorkArea() {
+        var comp = activeComp(); if (!comp) return;
+        try { comp.workAreaStart = 0; comp.workAreaDuration = comp.duration; } catch (e) {}
+        showStatus("工作區已還原為整段(0 ~ " + comp.duration.toFixed(2) + "s)。");
     }
 
     // 預覽解析度切換(Full=1 / Half=2 / Third=3)
@@ -355,7 +351,7 @@
 
         // ── 切鏡 ──
         var secCut = section("切鏡");
-        secCut.add("statictext", undefined, "複製整疊→保留父子→對齊下個標記。標記來源:");
+        secCut.add("statictext", undefined, "選整疊圖層→在切點分成兩鏡;新整疊集中排上方(不交錯)。標記來源:");
         var rowCutSrc = secCut.add("group");
         var radComp  = rowCutSrc.add("radiobutton", undefined, "合成標記");
         var radAudio = rowCutSrc.add("radiobutton", undefined, "音檔圖層 marker");
@@ -365,8 +361,10 @@
         bMark.onClick = function () { addMarkerNow(radAudio.value ? "audio" : "comp"); };
         rowMark.add("statictext", undefined, "← 不怕中文輸入法吃掉 *");
         var rowCut = secCut.add("group");
-        var bCut = rowCut.add("button", undefined, "切下一鏡"); bCut.preferredSize.width = 200;
-        bCut.onClick = function () { cutNextShot(radAudio.value ? "audio" : "comp"); };
+        var bCutHead = rowCut.add("button", undefined, "切在播放頭");   bCutHead.preferredSize.width = 100;
+        var bCutMark = rowCut.add("button", undefined, "切到下個標記"); bCutMark.preferredSize.width = 100;
+        bCutHead.onClick = function () { cutShot(false, radAudio.value ? "audio" : "comp"); };
+        bCutMark.onClick = function () { cutShot(true,  radAudio.value ? "audio" : "comp"); };
 
         // ── 預覽效能 ──
         var secPv = section("預覽效能");
@@ -387,9 +385,11 @@
         bResF.onClick = function () { setPreviewRes(1); };
 
         var rowWA = secPv.add("group");
-        rowWA.add("statictext", undefined, "預覽:").preferredSize.width = 56;
-        var bWA = rowWA.add("button", undefined, "工作區框到本鏡"); bWA.preferredSize.width = 160;
+        rowWA.add("statictext", undefined, "播放範圍:").preferredSize.width = 56;
+        var bWA = rowWA.add("button", undefined, "框到選取鏡"); bWA.preferredSize.width = 100;
+        var bWAFull = rowWA.add("button", undefined, "還原全片"); bWAFull.preferredSize.width = 90;
         bWA.onClick = shotToWorkArea;
+        bWAFull.onClick = fullWorkArea;
 
         var rowPx = secPv.add("group");
         rowPx.add("statictext", undefined, "代理:").preferredSize.width = 56;
