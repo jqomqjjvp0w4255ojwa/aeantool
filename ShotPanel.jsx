@@ -176,6 +176,51 @@
         showStatus("已套 Overshoot 緩動(Position+Scale)。有彈跳感,輸出前確認看看。");
     }
 
+    // 軸心置中:把選取圖層的錨點移到合成正中央(畫面中心),且自動補償 Position 讓
+    // 內容不位移。對運鏡層特別有用——推拉/旋轉就會以畫面中心為基準。
+    // 已考慮目前的 Scale 與 Z 旋轉;預期用在「沒有父層」的鏡頭層(BG/Null)。
+    function anchorToCompCenter() {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先選取要置中軸心的圖層,再按。"); return; }
+        var cx = comp.width / 2, cy = comp.height / 2;
+        app.beginUndoGroup("軸心置中合成");
+        var withParent = 0, skipKeys = 0, done = 0;
+        try {
+            for (var i = 0; i < sel.length; i++) {
+                var lay = sel[i];
+                var aP = lay.property("ADBE Transform Group").property("ADBE Anchor Point");
+                var pP = lay.property("ADBE Transform Group").property("ADBE Position");
+                var sP = lay.property("ADBE Transform Group").property("ADBE Scale");
+                var rP = lay.property("ADBE Transform Group").property("ADBE Rotate Z");
+                // 已有 Position/Anchor 關鍵影格時跳過:此時錨點無法「全程都在中心」,
+                // 而且 setValue 會報錯。軸心置中請在加運鏡 key 之前做。
+                if ((pP.numKeys > 0) || (aP.numKeys > 0)) { skipKeys++; continue; }
+                if (lay.parent) { withParent++; }      // 有父層仍照做,但提醒可能不準
+                var A = aP.value, P = pP.value, S = sP.value;
+                var r = 0; try { r = rP.value * Math.PI / 180; } catch (eR) { r = 0; }
+                var sx = (S[0] || 100) / 100, sy = (S[1] || 100) / 100;
+                // dv = 想讓錨點落到的畫面點(comp 中心) − 目前 Position(=錨點目前所在畫面點)
+                var dvx = cx - P[0], dvy = cy - P[1];
+                // 反旋轉
+                var c = Math.cos(-r), s = Math.sin(-r);
+                var rx = dvx * c - dvy * s, ry = dvx * s + dvy * c;
+                // 除以縮放 → 換算到圖層空間的位移
+                rx = rx / (sx || 1); ry = ry / (sy || 1);
+                var newA = [A[0] + rx, A[1] + ry];
+                if (A.length > 2) newA.push(A[2]);
+                var newP = [cx, cy];
+                if (P.length > 2) newP.push(P[2]);
+                aP.setValue(newA);
+                pP.setValue(newP);
+                done++;
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已把 " + done + " 個圖層的軸心移到合成中央(內容不位移)。" +
+            (withParent ? "(其中 " + withParent + " 個有父層,結果可能略有偏差)" : "") +
+            (skipKeys ? " 跳過 " + skipKeys + " 個(已有 Position/Anchor 關鍵影格,請在加運鏡前先置中)。" : ""));
+    }
+
     // Solo 切換:Solo 選取圖層(取消其他圖層 solo),或還原。
     // 快取存「圖層參考 + 所屬 comp」,避免換 comp 或增刪圖層後用 index 還原到錯的圖層。
     var _soloCache = null; // { comp: CompItem, items: [{ layer, solo }] }
@@ -744,6 +789,11 @@
         bOver.helpTip  = "把現有 Position+Scale key 換成帶彈跳的強力緩動。";
         bShake.onClick = function () { camShake(8, 0.08, 1.0); };
         bOver.onClick  = function () { applyOvershoot(); };
+        var rowCam4 = secCam.add("group");
+        rowCam4.add("statictext", undefined, "軸心:").preferredSize.width = 56;
+        var bAnchorC = rowCam4.add("button", undefined, "置中到合成中央"); bAnchorC.preferredSize.width = 130;
+        bAnchorC.helpTip = "把選取圖層的軸心移到畫面正中央,內容不位移。推拉/旋轉會以中心為基準。請在加運鏡 key 之前做。";
+        bAnchorC.onClick = function () { anchorToCompCenter(); };
 
         // ── 切鏡 ──
         var secCut = section("切鏡");
