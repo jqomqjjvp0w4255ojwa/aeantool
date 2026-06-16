@@ -321,16 +321,21 @@
         pal.alignChildren = ["fill", "top"];
         pal.spacing = 6; pal.margins = 8;
 
+        // 分頁:每次只顯示一頁,面板高度大幅變矮(橫向擺放友善)
+        var tabs = pal.add("tabbedpanel");
+        tabs.alignChildren = ["fill", "top"];
+        tabs.preferredSize.height = 150;
+
         function section(title) {
-            var p = pal.add("panel", undefined, title);
-            p.orientation = "column";
-            p.alignChildren = ["fill", "top"];
-            p.spacing = 4; p.margins = 8;
-            return p;
+            var t = tabs.add("tab", undefined, title);
+            t.orientation = "column";
+            t.alignChildren = ["fill", "top"];
+            t.spacing = 4; t.margins = 10;
+            return t;
         }
 
         // ── 運鏡 ──
-        var secCam = section("運鏡(選鏡頭層 BG/Null)");
+        var secCam = section("運鏡");
         secCam.add("statictext", undefined, "開頭框好→設起幀;結尾框好→設迄幀(自動補 Position+Scale+緩動)");
         var rowCam = secCam.add("group");
         var bCamIn  = rowCam.add("button", undefined, "設起幀");      bCamIn.preferredSize.width = 90;
@@ -349,7 +354,7 @@
         bPanR.onClick = function () { camPreset("右"); };
 
         // ── 切鏡 ──
-        var secCut = section("切鏡(選整疊圖層)");
+        var secCut = section("切鏡");
         secCut.add("statictext", undefined, "複製整疊→保留父子→對齊下個標記。標記來源:");
         var rowCutSrc = secCut.add("group");
         var radComp  = rowCutSrc.add("radiobutton", undefined, "合成標記");
@@ -364,7 +369,7 @@
         bCut.onClick = function () { cutNextShot(radAudio.value ? "audio" : "comp"); };
 
         // ── 預覽效能 ──
-        var secPv = section("預覽效能(對畫面卡時用)");
+        var secPv = section("預覽效能");
         var rowFx = secPv.add("group");
         rowFx.add("statictext", undefined, "特效:").preferredSize.width = 56;
         var bFxOff = rowFx.add("button", undefined, "編輯模式(關陰影/模糊)"); bFxOff.preferredSize.width = 160;
@@ -395,6 +400,8 @@
         bPxOff.onClick  = function () { toggleProxyUse(false); };
         bPxOn.onClick   = function () { toggleProxyUse(true); };
         secPv.add("statictext", undefined, "代理只給「不會動的大插圖」;會動的(眨眼/嘴)套了會凍結");
+
+        tabs.selection = secCam;
 
         statusLabel = pal.add("statictext", undefined, "就緒", { truncate: "end" });
         statusLabel.alignment = ["fill", "bottom"];
