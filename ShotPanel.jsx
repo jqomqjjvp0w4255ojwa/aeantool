@@ -547,6 +547,8 @@
                     try { tg.property(n3[j]).setValue(stg.property(n3[j]).valueAtTime(t, false)); } catch (e) {}
                 }
             }
+            // 若原圖層有父層,Null 繼承同一父層(局部座標系才會一致)
+            if (src.parent) { try { nul.parent = src.parent; } catch (ep) {} }
             // 把 Null 放到原預合成圖層正上方(addNull 預設會跑到最上層)
             try { nul.moveBefore(src); } catch (em) {}
             // 只留 Null 被選取,方便接著操作
