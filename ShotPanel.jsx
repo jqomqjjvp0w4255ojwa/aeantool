@@ -470,24 +470,52 @@
     // ================= 圖層工具 =================
 
     // 一鍵清除選取圖層上的所有效果
+    // 遞迴清除一個屬性群組底下所有屬性的關鍵幀。回傳被清掉關鍵幀的屬性數。
+    function removeAllKeys(grp) {
+        var count = 0;
+        if (!grp) return 0;
+        for (var i = 1; i <= grp.numProperties; i++) {
+            var p;
+            try { p = grp.property(i); } catch (e) { continue; }
+            if (!p) continue;
+            if (p.propertyType === PropertyType.PROPERTY) {
+                try {
+                    if (p.numKeys > 0) {
+                        // 先記住目前值(目前時間求值),刪光 key 後設回去,避免屬性歸零跑掉
+                        var v = p.value;
+                        for (var k = p.numKeys; k >= 1; k--) { p.removeKey(k); }
+                        try { p.setValue(v); } catch (eS) {}
+                        count++;
+                    }
+                } catch (eP) {}
+            } else {
+                count += removeAllKeys(p); // 群組(含效果群組)往下遞迴
+            }
+        }
+        return count;
+    }
+
     function clearEffects() {
         var comp = activeComp(); if (!comp) return;
         var sel = comp.selectedLayers;
         if (sel.length === 0) { alert("先選取要清效果的圖層,再按。"); return; }
-        app.beginUndoGroup("清除效果");
-        var removed = 0;
+        app.beginUndoGroup("清除效果與關鍵幀");
+        var removed = 0, keysCleared = 0;
         try {
             for (var i = 0; i < sel.length; i++) {
                 var fx;
                 try { fx = sel[i].property("ADBE Effect Parade"); } catch (eP) { fx = null; }
-                if (!fx) continue;
-                // 由後往前刪,避免 index 位移
-                for (var f = fx.numProperties; f >= 1; f--) {
-                    try { fx.property(f).remove(); removed++; } catch (eR) {}
+                if (fx) {
+                    // 由後往前刪,避免 index 位移(移除效果本身就會一併移除其關鍵幀)
+                    for (var f = fx.numProperties; f >= 1; f--) {
+                        try { fx.property(f).remove(); removed++; } catch (eR) {}
+                    }
                 }
+                // 再清掉變換等屬性上殘留的關鍵幀(運鏡、淡入淡出等)
+                try { keysCleared += removeAllKeys(sel[i].property("ADBE Transform Group")); } catch (eT) {}
             }
         } finally { app.endUndoGroup(); }
-        showStatus("已清除 " + removed + " 個效果(" + sel.length + " 個圖層)。");
+        showStatus("已清除 " + removed + " 個效果、" + keysCleared + " 條含關鍵幀的屬性(" + sel.length + " 個圖層)。");
     }
 
     // 淡入 / 淡出:在選取圖層的 Opacity 上補關鍵影格,並套緩入緩出。
@@ -915,7 +943,8 @@
         bOpNull.onClick = linkOpacityToNull;
         var rowClr = secLay.add("group");
         rowClr.add("statictext", undefined, "效果:").preferredSize.width = 64;
-        var bClr = rowClr.add("button", undefined, "清除選取圖層所有效果"); bClr.preferredSize.width = 180;
+        var bClr = rowClr.add("button", undefined, "清除所有效果+關鍵幀"); bClr.preferredSize.width = 180;
+        bClr.helpTip = "移除選取圖層的全部效果,並清掉變換屬性(位置/縮放/不透明度等)上的關鍵幀,值保留在目前畫面狀態。";
         bClr.onClick = clearEffects;
         var rowSame = secLay.add("group");
         rowSame.add("statictext", undefined, "同源:").preferredSize.width = 64;
