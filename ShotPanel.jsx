@@ -187,6 +187,29 @@
             "。新鏡已選起,直接運鏡即可。");
     }
 
+    // 在目前時間下一個標記,完全不靠鍵盤(避開中文輸入法吃掉 * 的問題)。
+    // target: "comp" 下在合成標記;"audio" 下在選取的圖層(通常是音檔)上。
+    function addMarkerNow(target) {
+        var comp = activeComp(); if (!comp) return;
+        var t = comp.time;
+        app.beginUndoGroup("下標記");
+        var made = 0;
+        try {
+            if (target === "audio") {
+                var sel = comp.selectedLayers;
+                if (sel.length === 0) { alert("先選取要下標記的圖層(通常是音檔),再按。"); app.endUndoGroup(); return; }
+                for (var i = 0; i < sel.length; i++) {
+                    try { sel[i].property("ADBE Marker").setValueAtTime(t, new MarkerValue("")); made++; } catch (e) {}
+                }
+            } else {
+                comp.markerProperty.setValueAtTime(t, new MarkerValue(""));
+                made = 1;
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已在 " + t.toFixed(2) + "s 下 " + made + " 個標記(" +
+            (target === "audio" ? "選取圖層上" : "合成") + ")。");
+    }
+
     // ================= 預覽效能 =================
 
     // 每鏡單獨預覽:把工作區框到「選取圖層的範圍」
@@ -332,6 +355,10 @@
         var radComp  = rowCutSrc.add("radiobutton", undefined, "合成標記");
         var radAudio = rowCutSrc.add("radiobutton", undefined, "音檔圖層 marker");
         radComp.value = true;
+        var rowMark = secCut.add("group");
+        var bMark = rowMark.add("button", undefined, "下標記(目前時間)"); bMark.preferredSize.width = 130;
+        bMark.onClick = function () { addMarkerNow(radAudio.value ? "audio" : "comp"); };
+        rowMark.add("statictext", undefined, "← 不怕中文輸入法吃掉 *");
         var rowCut = secCut.add("group");
         var bCut = rowCut.add("button", undefined, "切下一鏡"); bCut.preferredSize.width = 200;
         bCut.onClick = function () { cutNextShot(radAudio.value ? "audio" : "comp"); };
