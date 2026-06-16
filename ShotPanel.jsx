@@ -594,7 +594,46 @@
         } catch (e) {}
     }
 
-    // 同源套效果:以「選取的樣板圖層」為準,把它身上的效果套到全專案中
+    // 遞迴複製群組底下的所有屬性(用 matchName 對應),處理巢狀群組(如圖層樣式)。
+    function copyGroupRecursive(sg, dg) {
+        if (!sg || !dg) return;
+        for (var i = 1; i <= sg.numProperties; i++) {
+            var sp = sg.property(i);
+            var dp = null;
+            try { dp = dg.property(sp.matchName); } catch (e) {}
+            if (!dp) continue;
+            var isLeaf = true;
+            try { isLeaf = (sp.propertyType === PropertyType.PROPERTY); } catch (e2) { isLeaf = true; }
+            if (isLeaf) { copyPropValue(sp, dp); }
+            else { copyGroupRecursive(sp, dp); }
+        }
+    }
+
+    // 複製圖層樣式(Layer Styles)。目標沒有的樣式會先 addProperty 啟用,再複製參數。
+    // 回傳複製的樣式數。
+    function copyLayerStyles(srcLayer, dstLayer) {
+        var ss, ds;
+        try { ss = srcLayer.property("ADBE Layer Styles"); } catch (e) { return 0; }
+        if (!ss || ss.numProperties === 0) return 0;
+        try { ds = dstLayer.property("ADBE Layer Styles"); } catch (e) { return 0; }
+        if (!ds) return 0;
+        var count = 0;
+        for (var i = 1; i <= ss.numProperties; i++) {
+            var sp = ss.property(i);
+            // 略過「混合選項」群組本身(它不是可加的樣式)
+            if (sp.matchName === "ADBE Blend Options Group") continue;
+            var dp = null;
+            try { dp = ds.property(sp.matchName); } catch (e) {}
+            if (!dp) { try { ds.addProperty(sp.matchName); dp = ds.property(sp.matchName); } catch (eA) { dp = null; } }
+            if (!dp) continue;
+            try { dp.enabled = sp.enabled; } catch (eE) {}
+            copyGroupRecursive(sp, dp);
+            count++;
+        }
+        return count;
+    }
+
+    // 同源套效果:以「選取的樣板圖層」為準,把它身上的效果 + 圖層樣式套到全專案中
     // 「來源(source)相同」的所有圖層(不是同名,是同一個來源 comp/素材)。
     // 目標已有同名效果就更新其參數,否則新增,避免重複堆疊。
     function applyEffectsToSameSource() {
@@ -605,10 +644,15 @@
         var src = tmpl.source;
         if (!src) { alert("樣板圖層沒有來源素材,無法判斷同源。"); return; }
         var tFx = tmpl.property("ADBE Effect Parade");
-        if (!tFx || tFx.numProperties === 0) { alert("樣板圖層上沒有任何效果。"); return; }
+        var nFx = (tFx ? tFx.numProperties : 0);
+        var tLS = null, nLS = 0;
+        try { tLS = tmpl.property("ADBE Layer Styles"); nLS = (tLS ? tLS.numProperties : 0); } catch (e) {}
+        // 圖層樣式群組至少含一個「混合選項」,所以 numProperties>1 才算真的有樣式
+        var hasStyles = (nLS > 1);
+        if (nFx === 0 && !hasStyles) { alert("樣板圖層上沒有效果,也沒有圖層樣式。"); return; }
 
-        app.beginUndoGroup("同源套效果");
-        var layers = 0, comps = 0;
+        app.beginUndoGroup("同源套效果/樣式");
+        var layers = 0, comps = 0, styleCopies = 0;
         try {
             for (var ci = 1; ci <= app.project.numItems; ci++) {
                 var it = app.project.item(ci);
@@ -618,34 +662,38 @@
                     var L = it.layer(li);
                     if (L === tmpl) continue;
                     if (L.source !== src) continue;          // 關鍵:依來源比對,非名稱
+                    // 1) 效果
                     var dFx = L.property("ADBE Effect Parade");
-                    if (!dFx) continue;
-                    for (var fi = 1; fi <= tFx.numProperties; fi++) {
-                        var se = tFx.property(fi);
-                        // 目標已有同名效果就重用(更新),否則新增
-                        var de = null;
-                        for (var ei = 1; ei <= dFx.numProperties; ei++) {
-                            if (dFx.property(ei).name === se.name) { de = dFx.property(ei); break; }
-                        }
-                        if (!de) { try { de = dFx.addProperty(se.matchName); } catch (eA) { de = null; } }
-                        if (!de) continue;
-                        try { de.name = se.name; } catch (eN) {}
-                        try { de.enabled = se.enabled; } catch (eE) {}
-                        for (var pi = 1; pi <= se.numProperties; pi++) {
-                            var sp = se.property(pi);
-                            var dp = null;
-                            try { dp = de.property(sp.matchName); } catch (eP) {}
-                            if (!dp) { try { dp = de.property(pi); } catch (eP2) {} }
-                            copyPropValue(sp, dp);
+                    if (dFx && nFx > 0) {
+                        for (var fi = 1; fi <= nFx; fi++) {
+                            var se = tFx.property(fi);
+                            // 目標已有同名效果就重用(更新),否則新增
+                            var de = null;
+                            for (var ei = 1; ei <= dFx.numProperties; ei++) {
+                                if (dFx.property(ei).name === se.name) { de = dFx.property(ei); break; }
+                            }
+                            if (!de) { try { de = dFx.addProperty(se.matchName); } catch (eA) { de = null; } }
+                            if (!de) continue;
+                            try { de.name = se.name; } catch (eN) {}
+                            try { de.enabled = se.enabled; } catch (eE) {}
+                            for (var pi = 1; pi <= se.numProperties; pi++) {
+                                var sp = se.property(pi);
+                                var dp = null;
+                                try { dp = de.property(sp.matchName); } catch (eP) {}
+                                if (!dp) { try { dp = de.property(pi); } catch (eP2) {} }
+                                copyPropValue(sp, dp);
+                            }
                         }
                     }
+                    // 2) 圖層樣式
+                    if (hasStyles) { styleCopies += copyLayerStyles(tmpl, L); }
                     layers++; touched = true;
                 }
                 if (touched) comps++;
             }
         } finally { app.endUndoGroup(); }
-        showStatus("已把樣板的 " + tFx.numProperties + " 個效果套到同源(來源:" + src.name +
-            ")的 " + layers + " 個圖層,跨 " + comps + " 個合成。樣板層本身不動。");
+        showStatus("已套到同源(來源:" + src.name + ")的 " + layers + " 個圖層、跨 " + comps +
+            " 個合成。效果 " + nFx + " 個" + (hasStyles ? "、圖層樣式已複製" : "") + "。樣板層本身不動。");
     }
 
     // ================= UI =================
@@ -789,8 +837,8 @@
         bClr.onClick = clearEffects;
         var rowSame = secLay.add("group");
         rowSame.add("statictext", undefined, "同源:").preferredSize.width = 64;
-        var bSame = rowSame.add("button", undefined, "把效果套到所有同源圖層"); bSame.preferredSize.width = 180;
-        bSame.helpTip = "選一個加好效果的圖層→把效果套到全專案中來源相同的所有圖層(依來源比對,非同名)。";
+        var bSame = rowSame.add("button", undefined, "把效果/樣式套到所有同源圖層"); bSame.preferredSize.width = 210;
+        bSame.helpTip = "選一個加好效果或圖層樣式的圖層→套到全專案中來源相同的所有圖層(依來源比對,非同名)。含效果與圖層樣式。";
         bSame.onClick = applyEffectsToSameSource;
         var rowNull = secLay.add("group");
         rowNull.add("statictext", undefined, "拆解:").preferredSize.width = 64;
