@@ -521,25 +521,59 @@
     // 拆解輔助:對選取的「預合成圖層」建一顆 Null,完全複製它的位置/縮放/旋轉/錨點。
     // 之後把預合成裡的內層圖層複製→貼到主合成→全選 parent 到這顆 Null,
     // 內層就會維持原本在畫面上的位置(不位移)。
+    // 關鍵:AE 的 parent 設定會「保留圖層當下的世界座標」。所以若 Null 一開始就帶著
+    // 預合成的變換,內層 parent 上去後位置不會變(仍停在貼上時的位置)→ 看起來沒用。
+    // 正解是兩步:① 先建一顆「世界恆等(identity)」的 Null,內層貼上後 parent 到它
+    // (此刻保留 = 內層維持自己原本的值);② 再把預合成的變換套到這顆 Null,
+    // 父層一動,所有子層就被一起帶到預合成原本在畫面上的位置。
+    var _alignNull = null;  // { comp, nul, src }
+
     function makeCompensationNull() {
         var comp = activeComp(); if (!comp) return;
         var sel = comp.selectedLayers;
         if (sel.length !== 1) { alert("只選「一個」預合成圖層,再按。"); return; }
         var src = sel[0];
-        app.beginUndoGroup("建立對齊 Null");
+        app.beginUndoGroup("建立對齊 Null(步驟1)");
         var nul;
         try {
             nul = comp.layers.addNull();
             nul.name = "對齊_" + src.name;
+            // 設成世界恆等:無父層、錨點(0,0)、位置(0,0)、縮放100、旋轉0
+            try { nul.parent = null; } catch (ep0) {}
+            var tg = nul.property("ADBE Transform Group");
+            try { tg.property("ADBE Anchor Point").setValue([0, 0]); } catch (ea) {}
+            try { tg.property("ADBE Position").setValue([0, 0]); } catch (eb) {}
+            try { tg.property("ADBE Scale").setValue([100, 100]); } catch (ec) {}
+            try { tg.property("ADBE Rotate Z").setValue(0); } catch (ed) {}
+            try { nul.moveBefore(src); } catch (em) {}
+            for (var s = 0; s < sel.length; s++) { sel[s].selected = false; }
+            nul.selected = true;
+            _alignNull = { comp: comp, nul: nul, src: src };
+        } finally { app.endUndoGroup(); }
+        showStatus("步驟1完成:已建恆等 Null「" + (nul ? nul.name : "") + "」。" +
+            "接著:進預合成複製內層→回主合成貼上→全選貼好的圖層 parent 到這顆 Null→" +
+            "再按【套用預合成變換到 Null】,內層就會被帶回原位。");
+    }
+
+    // 步驟2:把(步驟1記住的)預合成圖層變換,套到那顆對齊 Null。
+    function applyAlignNullTransform() {
+        if (!_alignNull) { alert("請先按【建預合成對齊 Null】建立。"); return; }
+        var comp = _alignNull.comp, nul = _alignNull.nul, src = _alignNull.src;
+        // 確認物件還在
+        try { var _c = nul.name; var _d = src.name; } catch (echk) {
+            _alignNull = null; alert("Null 或原預合成圖層已不存在,請重新從步驟1開始。"); return;
+        }
+        app.beginUndoGroup("套用預合成變換到 Null(步驟2)");
+        try {
+            // 父層也跟著原圖層,座標系才一致
+            try { nul.parent = src.parent ? src.parent : null; } catch (ep) {}
             var tg = nul.property("ADBE Transform Group");
             var stg = src.property("ADBE Transform Group");
-            // 逐項複製(用目前時間的值,避免被 key 影響)
             var t = comp.time;
             var names = ["ADBE Anchor Point", "ADBE Position", "ADBE Scale", "ADBE Rotate Z"];
             for (var i = 0; i < names.length; i++) {
                 try { tg.property(names[i]).setValue(stg.property(names[i]).valueAtTime(t, false)); } catch (e) {}
             }
-            // 3D 圖層的話補方向/X/Y 旋轉
             if (src.threeDLayer) {
                 try { nul.threeDLayer = true; } catch (e3) {}
                 var n3 = ["ADBE Orientation", "ADBE Rotate X", "ADBE Rotate Y"];
@@ -547,17 +581,9 @@
                     try { tg.property(n3[j]).setValue(stg.property(n3[j]).valueAtTime(t, false)); } catch (e) {}
                 }
             }
-            // 若原圖層有父層,Null 繼承同一父層(局部座標系才會一致)
-            if (src.parent) { try { nul.parent = src.parent; } catch (ep) {} }
-            // 把 Null 放到原預合成圖層正上方(addNull 預設會跑到最上層)
-            try { nul.moveBefore(src); } catch (em) {}
-            // 只留 Null 被選取,方便接著操作
-            for (var s = 0; s < sel.length; s++) { sel[s].selected = false; }
-            nul.selected = true;
         } finally { app.endUndoGroup(); }
-        showStatus("已建「" + (nul ? nul.name : "對齊 Null") + "」於原圖層上方。" +
-            "做法:進預合成複製內層→回主合成貼上→全選貼好的圖層,parent 到這顆 Null,位置就會吻合。" +
-            "(AE 腳本無法跨合成搬圖層,只能用 Null 對齊+手動貼上;不透明度、混合模式、效果不會經由 Null 繼承)");
+        showStatus("步驟2完成:已把「" + src.name + "」的變換套到 Null,已 parent 的內層應已回到原位。" +
+            "(不透明度、混合模式、效果不會經由 Null 繼承)");
     }
 
     // 淡黑/淡白過場(dip):在播放頭放一片固態色蓋全畫面,opacity 0→100→0。
@@ -898,10 +924,13 @@
         bSame.onClick = applyEffectsToSameSource;
         var rowNull = secLay.add("group");
         rowNull.add("statictext", undefined, "拆解:").preferredSize.width = 64;
-        var bNull = rowNull.add("button", undefined, "建預合成對齊 Null"); bNull.preferredSize.width = 160;
-        bNull.helpTip = "選一個預合成圖層→建 Null 複製其變換。再把內層貼到主合成、parent 到此 Null,位置不位移。";
+        var bNull = rowNull.add("button", undefined, "①建預合成對齊 Null"); bNull.preferredSize.width = 150;
+        bNull.helpTip = "選一個預合成圖層→建一顆恆等 Null。接著把內層貼到主合成、全選 parent 到此 Null。";
         bNull.onClick = makeCompensationNull;
-        secLay.add("statictext", undefined, "拆解預合成:建 Null→內層 parent 到它,即可不位移搬到主合成");
+        var bNull2 = rowNull.add("button", undefined, "②套用變換到 Null"); bNull2.preferredSize.width = 150;
+        bNull2.helpTip = "內層都 parent 到 Null 後再按:把預合成的變換套到 Null,內層即被帶回原位、不位移。";
+        bNull2.onClick = applyAlignNullTransform;
+        secLay.add("statictext", undefined, "拆解預合成:①建恆等Null→貼內層並parent到它→②套用變換,位置即吻合");
 
         tabs.selection = secCam;
 
