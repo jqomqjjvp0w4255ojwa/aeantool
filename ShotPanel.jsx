@@ -87,12 +87,15 @@
                 var p = posProp(lay), s = scaleProp(lay);
                 var pv = p.valueAtTime(t0, false), sv = s.valueAtTime(t0, false);
                 var drift = 0.12;                          // 縮放幅度 12%
-                var pan = (comp.width || 1920) * 0.06;     // 平移幅度 ≈ 畫面 6%
+                var pan = (comp.width || 1920) * 0.06;     // 水平平移幅度 ≈ 畫面寬 6%
+                var panY = (comp.height || 1080) * 0.06;   // 垂直平移幅度 ≈ 畫面高 6%
                 var pEnd = pv.slice(), sEnd = sv.slice();
                 if (kind === "推")      { sEnd[0] = sv[0] * (1 + drift); sEnd[1] = sv[1] * (1 + drift); }
                 else if (kind === "拉") { sEnd[0] = sv[0] * (1 - drift); sEnd[1] = sv[1] * (1 - drift); }
                 else if (kind === "左") { pEnd[0] = pv[0] + pan; }      // 鏡頭左移 = 內容右移
                 else if (kind === "右") { pEnd[0] = pv[0] - pan; }
+                else if (kind === "上") { pEnd[1] = pv[1] + panY; }     // 鏡頭上搖 = 內容下移
+                else if (kind === "下") { pEnd[1] = pv[1] - panY; }
                 s.setValueAtTime(t0, sv); s.setValueAtTime(t1, sEnd);
                 p.setValueAtTime(t0, pv); p.setValueAtTime(t1, pEnd);
                 easyEaseProp(s); easyEaseProp(p);
@@ -626,8 +629,17 @@
         app.beginUndoGroup("淡色過場");
         try {
             var name = (rgb[0] >= 0.5 ? "淡白過場" : "淡黑過場");
+            // 先記住目前選取(addSolid 會把選取轉移到新固態層)
+            var sel = comp.selectedLayers;
             var solid = comp.layers.addSolid(rgb, name, comp.width, comp.height, 1);
-            solid.moveToBeginning();           // 蓋在最上層
+            // 放在「選取圖層」最上面那層之上;沒選取才退回蓋到最上層
+            if (sel.length > 0) {
+                var top = sel[0];
+                for (var si = 1; si < sel.length; si++) if (sel[si].index < top.index) top = sel[si];
+                solid.moveBefore(top);
+            } else {
+                solid.moveToBeginning();
+            }
             solid.startTime = start;
             solid.inPoint = start;
             solid.outPoint = end;
@@ -638,7 +650,7 @@
             easyEaseProp(op);
         } finally { app.endUndoGroup(); }
         showStatus("已在 " + t.toFixed(2) + "s 加" + (rgb[0] >= 0.5 ? "淡白" : "淡黑") +
-            "過場(" + durSec + "s)。整疊都吃得到,不用 precomp、不碰圖層透明度。");
+            "過場(" + durSec + "s),放在選取圖層上方(沒選取則蓋最上層)。不用 precomp、不碰圖層透明度。");
     }
 
     // 整疊淡出控制 Null:把選取圖層的 opacity 用表達式接到一顆 Null 的 opacity,
@@ -837,6 +849,10 @@
         var bPull = rowCam2.add("button", undefined, "慢拉"); bPull.preferredSize.width = 56;
         var bPanL = rowCam2.add("button", undefined, "左搖"); bPanL.preferredSize.width = 56;
         var bPanR = rowCam2.add("button", undefined, "右搖"); bPanR.preferredSize.width = 56;
+        var bPanU = rowCam2.add("button", undefined, "上搖"); bPanU.preferredSize.width = 56;
+        var bPanD = rowCam2.add("button", undefined, "下搖"); bPanD.preferredSize.width = 56;
+        bPanU.onClick = function () { camPreset("上"); };
+        bPanD.onClick = function () { camPreset("下"); };
         bPush.onClick = function () { camPreset("推"); };
         bPull.onClick = function () { camPreset("拉"); };
         bPanL.onClick = function () { camPreset("左"); };
