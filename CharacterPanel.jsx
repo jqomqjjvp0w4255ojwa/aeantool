@@ -499,15 +499,15 @@
         return shape;
     }
 
-    // 補睜眼:一個 Shape Layer,左右各一隻眼 =「同色方橢圓(圓角矩形)+ 白色圓點」,不綁滑桿。
+    // 補睜眼:一個 Shape Layer,左右各一隻眼 =「同色直立圓角形狀(實心)+ 上方白色高光點」,不綁滑桿。
     function createEyesPair(comp, refLay) {
-        var ew = 46, eh = 34, gap = 80;
+        var ew = 34, eh = 44, gap = 80;
         try {
-            ew = Math.max(refLay.width * 0.45, 30);
-            eh = ew * 0.72;
-            gap = Math.max(refLay.width * 1.1, ew * 1.8);
+            ew = Math.max(refLay.width * 0.4, 26);
+            eh = ew * 1.3;            // 直立、偏高
+            gap = Math.max(refLay.width * 1.0, ew * 2.2);
         } catch (e) {}
-        var off = gap / 2, dot = Math.max(Math.min(ew, eh) * 0.28, 5);
+        var off = gap / 2, dot = Math.max(ew * 0.32, 5), dotY = -eh * 0.25; // 高光放上方
 
         var shape = comp.layers.addShape();
         shape.name = "眼(未綁)";
@@ -522,7 +522,7 @@
             var gdc = gd.property("ADBE Vectors Group");
             var dotE = gdc.addProperty("ADBE Vector Shape - Ellipse");
             dotE.property("ADBE Vector Ellipse Size").setValue([dot, dot]);
-            try { dotE.property("ADBE Vector Ellipse Position").setValue([a[0] + eyes[d].cx, a[1]]); } catch (eP) {}
+            try { dotE.property("ADBE Vector Ellipse Position").setValue([a[0] + eyes[d].cx, a[1] + dotY]); } catch (eP) {}
             var dotF = gdc.addProperty("ADBE Vector Graphic - Fill");
             dotF.property("ADBE Vector Fill Color").setValue([1, 1, 1, 1]);
         }
@@ -532,7 +532,7 @@
             var rect = gbc.addProperty("ADBE Vector Shape - Rect");
             rect.property("ADBE Vector Rect Size").setValue([ew, eh]);
             try { rect.property("ADBE Vector Rect Position").setValue([a[0] + eyes[b].cx, a[1]]); } catch (eRP) {}
-            try { rect.property("ADBE Vector Rect Roundness").setValue(Math.min(ew, eh) * 0.45); } catch (eRR) {}
+            try { rect.property("ADBE Vector Rect Roundness").setValue(Math.min(ew, eh) * 0.5); } catch (eRR) {}
             var rf = gbc.addProperty("ADBE Vector Graphic - Fill");
             rf.property("ADBE Vector Fill Color").setValue(PLACEHOLDER_RGB);
         }
