@@ -560,6 +560,81 @@
         showStatus("已開回 " + n + " 個圖層的聲音。");
     }
 
+    // 帶入的外層音檔圖層名前綴(方便事後一鍵清除)
+    var BROUGHT_AUDIO_PREFIX = "★外層音檔 ";
+
+    // 判斷是否為頂層合成(沒有被其他合成當作圖層來源引用)。
+    function isTopLevelComp(comp) {
+        for (var i = 1; i <= app.project.numItems; i++) {
+            var c = app.project.item(i);
+            if (!(c instanceof CompItem) || c === comp) continue;
+            for (var j = 1; j <= c.numLayers; j++) {
+                try { if (c.layer(j).source === comp) return false; } catch (e) {}
+            }
+        }
+        return true;
+    }
+
+    // 在「目前內層合成」帶入最外層(頂層合成)的純音檔:用同一個素材參照(不複製檔案),
+    // 對齊時間 → 內層預覽時就能同步聽到外層對白/音樂。輸出前用「移除帶入音檔」清掉,避免重複發聲。
+    // (AE 沒有全域音軌,內層無法直接播外層聲音,這是把音檔參照放進來的等效做法。)
+    function bringInOuterAudio() {
+        var comp = activeComp(); if (!comp) return;
+        if (isTopLevelComp(comp)) { alert("目前這個合成就是最外層(沒有更外層的音檔可帶入)。"); return; }
+
+        // 從所有頂層合成收集純音檔圖層
+        var found = [];
+        for (var i = 1; i <= app.project.numItems; i++) {
+            var c = app.project.item(i);
+            if (!(c instanceof CompItem) || c === comp) continue;
+            if (!isTopLevelComp(c)) continue;
+            for (var j = 1; j <= c.numLayers; j++) {
+                var L = c.layer(j);
+                if (isPureAudioLayer(L)) {
+                    found.push({ src: L.source, startTime: L.startTime, inPoint: L.inPoint, outPoint: L.outPoint, name: L.name });
+                }
+            }
+        }
+        if (found.length === 0) { alert("在最外層(頂層合成)找不到純音檔圖層。"); return; }
+
+        app.beginUndoGroup("帶入外層音檔");
+        var added = 0, dup = 0;
+        try {
+            for (var f = 0; f < found.length; f++) {
+                // 同來源已在此合成就略過(避免重複)
+                var exists = false;
+                for (var k = 1; k <= comp.numLayers; k++) {
+                    try { if (comp.layer(k).source === found[f].src) { exists = true; break; } } catch (e) {}
+                }
+                if (exists) { dup++; continue; }
+                var nl = comp.layers.add(found[f].src);
+                nl.name = BROUGHT_AUDIO_PREFIX + found[f].name;
+                try { nl.startTime = found[f].startTime; } catch (e1) {}
+                try { nl.outPoint = found[f].outPoint; } catch (e2) {}
+                try { nl.inPoint = found[f].inPoint; } catch (e3) {}
+                try { nl.moveToEnd(); } catch (e4) {}
+                added++;
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已帶入 " + added + " 個外層音檔(預覽會同步發聲)" +
+            (dup ? "、" + dup + " 個已存在略過" : "") +
+            "。★輸出前按「移除帶入音檔」清掉,免得跟外層重複發聲。");
+    }
+
+    // 移除目前合成裡所有「帶入的外層音檔」(依名稱前綴辨識)。
+    function removeBroughtInAudio() {
+        var comp = activeComp(); if (!comp) return;
+        var n = 0;
+        app.beginUndoGroup("移除帶入音檔");
+        try {
+            for (var i = comp.numLayers; i >= 1; i--) {
+                var L = comp.layer(i);
+                if (L.name.indexOf(BROUGHT_AUDIO_PREFIX) === 0) { try { L.remove(); n++; } catch (e) {} }
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已移除 " + n + " 個帶入的外層音檔。");
+    }
+
     // ================= 圖層工具 =================
 
     // 一鍵清除選取圖層上的所有效果
@@ -1023,6 +1098,16 @@
         bAudOn.helpTip   = "把目前合成所有圖層的聲音開回來。";
         bAudMute.onClick = muteNonAudioFiles;
         bAudOn.onClick   = restoreAllAudio;
+
+        var rowAud2 = secPv.add("group");
+        rowAud2.add("statictext", undefined, "外層音:").preferredSize.width = 56;
+        var bAudBring = rowAud2.add("button", undefined, "帶入外層音檔"); bAudBring.preferredSize.width = 110;
+        var bAudDrop  = rowAud2.add("button", undefined, "移除帶入音檔"); bAudDrop.preferredSize.width = 110;
+        bAudBring.helpTip = "在目前內層合成帶入最外層的純音檔(同素材參照、對齊時間),內層預覽即可同步聽到外層對白/音樂。AE 沒有全域音軌,這是等效做法。";
+        bAudDrop.helpTip  = "移除目前合成裡所有「帶入的外層音檔」。輸出前按,避免和外層重複發聲。";
+        bAudBring.onClick = bringInOuterAudio;
+        bAudDrop.onClick  = removeBroughtInAudio;
+        secPv.add("statictext", undefined, "帶入=把外層音檔放進內層預覽用(同步發聲);輸出前記得「移除帶入音檔」避免重複。");
 
         // ── 圖層工具 ──
         var secLay = section("圖層");
