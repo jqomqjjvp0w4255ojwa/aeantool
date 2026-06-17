@@ -10,7 +10,7 @@
 //
 //   運鏡   選鏡頭層 → 開頭設起幀 → 結尾設迄幀(自動補 Position+Scale + 緩動)
 //   切鏡   選整疊圖層 → 切下一鏡(複製整疊、保留父子、對齊下個標記)
-//   預覽   對畫面卡時:關陰影/模糊、工作區框到本鏡、Solo 本鏡
+//   預覽   對畫面卡時:關陰影/模糊、工作區框到本鏡、Solo 本鏡、靜圖代理
 
 (function (thisObj) {
 
@@ -421,6 +421,103 @@
             adjCount + " 個調整層" + (on ? "。" : "(編輯時用,輸出前按「還原特效」)。"));
     }
 
+    // 粗略判斷一個來源合成「會不會動」(任一圖層有關鍵幀或表達式)。
+    // 會動的套靜圖代理會被凍結成第一格,所以套之前先警告。
+    function compHasAnimation(comp) {
+        if (!(comp instanceof CompItem)) return false;
+        function grpAnimated(grp) {
+            for (var i = 1; i <= grp.numProperties; i++) {
+                var p;
+                try { p = grp.property(i); } catch (e) { continue; }
+                if (!p) continue;
+                if (p.propertyType === PropertyType.PROPERTY) {
+                    try { if (p.numKeys > 0 || (p.expressionEnabled && p.expression !== "")) return true; } catch (e2) {}
+                } else {
+                    if (grpAnimated(p)) return true;
+                }
+            }
+            return false;
+        }
+        for (var i = 1; i <= comp.numLayers; i++) {
+            try { if (grpAnimated(comp.layer(i))) return true; } catch (e) {}
+        }
+        return false;
+    }
+
+    // 靜圖代理:把選取圖層的「來源合成」算成一張 PNG 當 proxy,預覽輕量、輸出可移除。
+    // 只適合「不會動的大插圖 precomp」;內含動畫(眨眼/嘴)的會被凍結 → 套之前先警告。
+    // 注意:代理是同一張畫面的替身,套上去後「畫面看起來不會變」是正常的,只是底層變輕。
+    function makeStillProxy() {
+        var comp = activeComp(); if (!comp) return;
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先選取要做代理的圖層(來源是合成的大插圖),再按。"); return; }
+
+        // 先抓出會動的來源,提醒使用者(套了會凍結)
+        var animNames = [];
+        for (var a = 0; a < sel.length; a++) {
+            var s0 = sel[a].source;
+            if (s0 instanceof CompItem && compHasAnimation(s0)) animNames.push(s0.name);
+        }
+        if (animNames.length) {
+            var go = confirm("這些來源合成「會動」,套靜圖代理會被凍結成第一格:\n  " +
+                animNames.join("、") + "\n\n仍要套嗎?(會動的素材建議不要套)");
+            if (!go) return;
+        }
+
+        var dir;
+        try {
+            dir = (app.project.file)
+                ? new Folder(app.project.file.parent.fsName + "/_proxy")
+                : new Folder(Folder.temp.fsName + "/AE_proxy");
+            if (!dir.exists) dir.create();
+        } catch (eF) { alert("無法建立 proxy 資料夾。"); return; }
+
+        var done = 0, skip = [];
+        app.beginUndoGroup("建立靜圖代理");
+        try {
+            for (var i = 0; i < sel.length; i++) {
+                var src = sel[i].source;
+                if (!(src instanceof CompItem)) { skip.push(sel[i].name + "(來源不是合成)"); continue; }
+                try {
+                    var f = new File(dir.fsName + "/" + src.name.replace(/[\\\/:*?"<>|]/g, "_") + "_proxy.png");
+                    src.saveFrameToPng(src.time, f);
+                    src.setProxy(f);   // setProxy 會自動 useProxy=true
+                    done++;
+                } catch (eS) { skip.push(sel[i].name + "(算圖失敗)"); }
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已對 " + done + " 個來源建立靜圖代理(底層變輕,畫面看起來不變是正常的)。" +
+            (skip.length ? "略過:" + skip.join("、") + "。" : "") +
+            "要回原圖按「全部還原原圖」即可。");
+    }
+
+    // 全專案切換 proxy 開/關(use=true 用代理、false 用原圖)。不依賴選取,保證關得掉。
+    function proxyUseAll(use) {
+        var n = 0;
+        app.beginUndoGroup(use ? "全部用代理" : "全部用原圖");
+        try {
+            for (var i = 1; i <= app.project.numItems; i++) {
+                var it = app.project.item(i);
+                try { if (it.hasProxy) { it.useProxy = use; n++; } } catch (e) {}
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus(n === 0 ? "專案裡目前沒有任何代理。" :
+            "已把全專案 " + n + " 個代理切到「" + (use ? "用代理(輕量預覽)" : "用原圖") + "」。");
+    }
+
+    // 全專案移除 proxy(徹底拿掉,不只是停用)。「關不掉」時用這個。
+    function proxyRemoveAll() {
+        var n = 0;
+        app.beginUndoGroup("全部移除代理");
+        try {
+            for (var i = 1; i <= app.project.numItems; i++) {
+                var it = app.project.item(i);
+                try { if (it.hasProxy) { it.setProxyToNone(); n++; } } catch (e) {}
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus(n === 0 ? "專案裡目前沒有任何代理。" :
+            "已移除全專案 " + n + " 個代理,全部回到原圖。");
+    }
 
     // ================= 圖層工具 =================
 
@@ -863,6 +960,19 @@
         bSoloOff.helpTip = "還原所有圖層的 Solo 狀態。";
         bSolo.onClick    = function () { soloShot(true); };
         bSoloOff.onClick = function () { soloShot(false); };
+
+        var rowPx = secPv.add("group");
+        rowPx.add("statictext", undefined, "代理:").preferredSize.width = 56;
+        var bPxMake = rowPx.add("button", undefined, "建靜圖代理"); bPxMake.preferredSize.width = 90;
+        var bPxOn   = rowPx.add("button", undefined, "全部用代理"); bPxOn.preferredSize.width = 90;
+        var bPxOff  = rowPx.add("button", undefined, "全部還原原圖"); bPxOff.preferredSize.width = 100;
+        bPxMake.helpTip = "選「不會動的大插圖」圖層→把來源算成一張 PNG 當替身,預覽變輕。畫面看起來不變是正常的(只是底層變輕)。會動的素材套了會被凍結,面板會先警告。";
+        bPxOn.helpTip   = "全專案的代理都改用代理(輕量預覽)。不必選圖層。";
+        bPxOff.helpTip  = "徹底移除全專案所有代理、回到原圖。「關不掉」時按這顆一定有效。輸出前按這個。";
+        bPxMake.onClick = makeStillProxy;
+        bPxOn.onClick   = function () { proxyUseAll(true); };
+        bPxOff.onClick  = function () { proxyRemoveAll(); };
+        secPv.add("statictext", undefined, "代理=不會動的大插圖換成靜圖替身,預覽變輕;畫面看起來不變正常。輸出前按「全部還原原圖」。");
 
         // ── 圖層工具 ──
         var secLay = section("圖層");
