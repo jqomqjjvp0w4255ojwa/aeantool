@@ -452,7 +452,7 @@
         ell.property("ADBE Vector Ellipse Size").setValue([w, h]);
         try { ell.property("ADBE Vector Ellipse Position").setValue([a[0], a[1]]); } catch (eEP) {}
         var fill = grp.property("ADBE Vectors Group").addProperty("ADBE Vector Graphic - Fill");
-        fill.property("ADBE Vector Fill Color").setValue([0.23, 0.12, 0.10, 1]);
+        fill.property("ADBE Vector Fill Color").setValue([0.9569, 0.4824, 0.4549, 1]); // #F47B74
         return shape;
     }
 
@@ -890,26 +890,15 @@
             // 收集所有「說話嘴」(可多組:開心說話、不開心說話…),各自有自己的滑桿值
             var talkMouths = collectFeature(comp, "說話嘴");
             var closed = findFeature(comp, "嘴");
-            var generated = false;
 
-            // 沒有說話嘴時的自動生成(維持舊有便利:只有閉嘴 → 生一張說話嘴)
+            // 說話設定只負責「接線」,不再自動生成嘴(生成請用「補張嘴/補閉嘴」→ 調整 → 標記)
             if (talkMouths.length === 0) {
-                if (closed) {
-                    var t = createOpenMouth(comp, closed);
-                    opacityProp(t).expression = switchExpr(mouthName, talkValue(comp));
-                    opacityProp(closed).expression = switchExpr(mouthName, 0);
-                    talkMouths.push(t);
-                    generated = true;
-                } else {
-                    alert("找不到「說話嘴」或「嘴」圖層,請先在「標記」頁標記嘴巴圖層。");
-                    return;
-                }
+                alert("找不到「說話嘴」。\n請先用「補張嘴」生成、調好,選取它再點「說話嘴」標記,再做說話設定。");
+                return;
             }
-            // 有說話嘴但沒有閉嘴 → 自動生一條閉嘴線
             if (!closed) {
-                closed = createClosedMouth(comp, talkMouths[0]);
-                opacityProp(closed).expression = switchExpr(mouthName, 0);
-                generated = generated || "open_only";
+                alert("找不到「嘴」(閉嘴)。\n請先用「補閉嘴」生成、調好,選取它再點「嘴」標記,再做說話設定。");
+                return;
             }
 
             // 所有說話嘴共用一個「嘴軸」,擠壓表達式對任何說話值都生效
@@ -924,13 +913,6 @@
                       "嘴如果是斜的:把「嘴軸」Rotation 轉到跟嘴同角度,\n" +
                       "美術不會跟著轉,開合就會沿嘴的方向、不會歪。\n\n" +
                       "想要嘴張開但不動(如唱歌長音),把滑桿 key 到原本的靜態嘴型值即可。";
-            if (generated === true) {
-                msg += "\n\n此角色原本只有「嘴」(閉著),我生了一個深色橢圓 Shape 當「說話嘴」,\n" +
-                       "請花十秒調一下它的大小和顏色,讓它貼合畫風。";
-            } else if (generated === "open_only") {
-                msg += "\n\n此角色原本沒有閉嘴,我已自動生成一條「嘴」線段(#7E594C 圓角)。\n" +
-                       "位置在嘴軸中心,你可以用鋼筆工具拉 Bezier 弧度、調 Stroke 配合畫風。";
-            }
             showStatus(msg);
         } finally { app.endUndoGroup(); }
     }
