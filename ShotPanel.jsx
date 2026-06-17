@@ -305,43 +305,56 @@
 
         // 依圖層順序(index 小→大,上→下)排序,確保複製出的整疊維持原本上下關係
         var ordered = sel.slice().sort(function (a, b) { return a.index - b.index; });
+        var EPS = 1e-4;
 
         app.beginUndoGroup("切鏡");
         try {
-            // 複製,建立 原→新 對照(用來重連內部父子)
-            var pairs = [];
+            // 對每個選取圖層決定它的「切點之後代表層」rep:
+            //   跨過切點 → 複製一份當後段(原圖收到切點);rep = 複製層
+            //   完全在切點之後 → 整層屬於新鏡,直接移上去不複製;rep = 自己
+            //   完全在切點之前 → 只屬於前一鏡,留著不動;rep = null
+            var info = [];
             for (var i = 0; i < ordered.length; i++) {
-                pairs.push({ orig: ordered[i], dup: ordered[i].duplicate() });
+                var L = ordered[i], rep = null;
+                if (L.inPoint < T - EPS && L.outPoint > T + EPS) {
+                    var dup = L.duplicate();
+                    try { L.outPoint = T; } catch (eO) {}
+                    try { dup.inPoint = T; } catch (eN) {}
+                    rep = dup;
+                } else if (L.inPoint >= T - EPS) {
+                    rep = L; // 整層在切點之後 → 屬於新鏡
+                }
+                info.push({ orig: L, rep: rep });
             }
-            // 內部父子重連:原本 parent 也在選取群裡 → 改指到對應的新圖層
-            for (var j = 0; j < pairs.length; j++) {
-                var op = pairs[j].orig.parent;
+            // 內部父子重連:若某層的 parent 也在選取群裡,後段就指到那個 parent 的後段代表層
+            for (var j = 0; j < info.length; j++) {
+                if (!info[j].rep) continue;
+                var op = info[j].orig.parent;
                 if (!op) continue;
-                for (var q = 0; q < pairs.length; q++) {
-                    if (pairs[q].orig === op) { pairs[j].dup.parent = pairs[q].dup; break; }
+                for (var q = 0; q < info.length; q++) {
+                    if (info[q].orig === op && info[q].rep) { try { info[j].rep.parent = info[q].rep; } catch (eP) {} break; }
                 }
             }
-            // 切點:原圖層收到切點前、新圖層從切點起
-            var topOrig = pairs[0].orig; // index 最小的原圖層(最上面)
-            for (var d = 0; d < pairs.length; d++) {
-                var O = pairs[d].orig, N = pairs[d].dup;
-                try { if (O.inPoint < T && O.outPoint > T) O.outPoint = T; } catch (eO) {}
-                try { if (N.outPoint > T && N.inPoint < T) N.inPoint = T; } catch (eN) {}
-                // 把新圖層集中移到原整疊上方(依序,維持彼此順序)
-                try { N.moveBefore(topOrig); } catch (eM) {}
+            // 把所有「後段代表層」集中移到原整疊上方,維持彼此上下順序
+            var topOrig = ordered[0];
+            var reps = [];
+            for (var r = 0; r < info.length; r++) if (info[r].rep) reps.push(info[r].rep);
+            for (var m = 0; m < reps.length; m++) {
+                if (reps[m] !== topOrig) { try { reps[m].moveBefore(topOrig); } catch (eM) {} }
             }
-            // 選起新整疊、播放頭移到切點,接著就能運鏡
+            // 選起新整疊、播放頭移到切點
             for (var u = 1; u <= comp.numLayers; u++) comp.layer(u).selected = false;
-            for (var v = 0; v < pairs.length; v++) pairs[v].dup.selected = true;
+            for (var v = 0; v < reps.length; v++) reps[v].selected = true;
             comp.time = T;
-            // 自動把工作區框到新鏡(入點=切點,出點=新整疊最大出點),按 0 即可預覽
+            // 自動把工作區框到新鏡(入點=切點,出點=新整疊最大出點)
             var newEnd = T;
-            for (var w = 0; w < pairs.length; w++) {
-                try { if (pairs[w].dup.outPoint > newEnd) newEnd = pairs[w].dup.outPoint; } catch (eW) {}
+            for (var w = 0; w < reps.length; w++) {
+                try { if (reps[w].outPoint > newEnd) newEnd = reps[w].outPoint; } catch (eW) {}
             }
             try { comp.workAreaStart = T; comp.workAreaDuration = Math.max(0.1, newEnd - T); } catch (eWA) {}
+            showStatus("已在 " + T.toFixed(2) + "s 切鏡:" + reps.length +
+                " 層進新鏡(跨切點者已複製分段、整段在後者直接移上),工作區已框到新鏡,按 0 預覽。");
         } finally { app.endUndoGroup(); }
-        showStatus("已在 " + T.toFixed(2) + "s 切鏡,新整疊排上方已選起;工作區已框到新鏡,按 0 預覽。");
     }
 
     // 在目前時間下一個標記,完全不靠鍵盤(避開中文輸入法吃掉 * 的問題)。
