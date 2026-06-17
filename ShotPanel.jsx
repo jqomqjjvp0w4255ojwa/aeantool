@@ -660,60 +660,57 @@
         showStatus("已移除 " + n + " 個帶入的外層音檔。");
     }
 
-    var SLICE_MARKER_PREFIX = "★切片 ";
+    var CUT_IN_MARK = "▸";   // 切入標記(短字,看得清楚)
+    var CUT_OUT_MARK = "◂";  // 切出標記
 
-    // 在「目前內層合成」的時間軸上,依外層純音檔切片的邊界打「合成標記」(comp marker),
-    // 註解寫上切片名 → 內層就能一眼看到每段對白/音樂落在哪。需兩邊時間軸 time 0 對齊才準。
-    function markOuterSlices() {
+    // 在外層選取一個圖層(=1 個 cut),依它在外層時間軸的兩端(in/out),
+    // 把兩個短標記塞進「該圖層的 precomp」自己的時間軸 → 進去後就看得到這段 cut 的起訖。
+    // 內層時間 = (外層時間 - startTime) × (100 / stretch);沒開時間重映射時準確。
+    function markCutIntoPrecomp() {
         var comp = activeComp(); if (!comp) return;
-        if (isTopLevelComp(comp)) { alert("目前這個合成就是最外層(沒有更外層的切片可標記)。"); return; }
-        if (!comp.markerProperty) { alert("此版本 AE 不支援合成標記(comp marker)。"); return; }
+        var sel = comp.selectedLayers;
+        if (sel.length === 0) { alert("先在外層時間軸選取要標記的圖層(precomp),再按。"); return; }
 
-        // 收集外層切片邊界(以入點為起標;去重)
-        var marks = [];
-        function pushMark(t, label) {
-            if (t < 0 || t > comp.duration) return;
-            for (var m = 0; m < marks.length; m++) if (Math.abs(marks[m].t - t) < 1e-3) return;
-            marks.push({ t: t, label: label });
-        }
-        for (var i = 1; i <= app.project.numItems; i++) {
-            var c = app.project.item(i);
-            if (!(c instanceof CompItem) || c === comp) continue;
-            if (!isTopLevelComp(c)) continue;
-            for (var j = 1; j <= c.numLayers; j++) {
-                var L = c.layer(j);
-                if (!isPureAudioLayer(L)) continue;
-                if (L.outPoint <= 0 || L.inPoint >= comp.duration) continue;
-                pushMark(L.inPoint, L.name);
-            }
-        }
-        if (marks.length === 0) { alert("在最外層找不到與此合成時間重疊的純音檔切片。"); return; }
-
-        app.beginUndoGroup("標記外層切片");
-        var added = 0;
+        app.beginUndoGroup("切到 precomp 標記");
+        var done = 0, skipped = 0;
         try {
-            for (var k = 0; k < marks.length; k++) {
-                var mk = new MarkerValue(SLICE_MARKER_PREFIX + marks[k].label);
-                comp.markerProperty.setValueAtTime(marks[k].t, mk);
-                added++;
+            for (var s = 0; s < sel.length; s++) {
+                var L = sel[s];
+                var src = null;
+                try { src = L.source; } catch (e) {}
+                if (!src || !(src instanceof CompItem) || !src.markerProperty) { skipped++; continue; }
+
+                var factor = 100 / (L.stretch || 100);
+                var tIn  = (L.inPoint  - L.startTime) * factor;
+                var tOut = (L.outPoint - L.startTime) * factor;
+                if (tIn < 0) tIn = 0;
+                if (tOut > src.duration) tOut = src.duration;
+
+                src.markerProperty.setValueAtTime(tIn,  new MarkerValue(CUT_IN_MARK));
+                src.markerProperty.setValueAtTime(tOut, new MarkerValue(CUT_OUT_MARK));
+                done++;
             }
         } finally { app.endUndoGroup(); }
-        showStatus("已在時間軸打上 " + added + " 個切片標記(★切片 …)。需與外層 time 0 對齊才會準;不要時按「清除切片標記」。");
+
+        if (done === 0) { alert("選取的圖層都不是 precomp(沒有可寫入的合成時間軸)。"); return; }
+        showStatus("已往 " + done + " 個 precomp 各塞 2 個短標記(▸切入 / ◂切出)" +
+            (skipped ? "、" + skipped + " 個非 precomp 略過" : "") +
+            "。雙擊進該 precomp 即可看到這段 cut 的起訖;不要時在裡面按「清除切標記」。");
     }
 
-    // 清除目前合成裡所有「切片標記」(依註解前綴辨識,不動其他標記)。
+    // 清除目前合成裡的切標記(▸/◂),不動其他 marker。
     function clearSliceMarkers() {
         var comp = activeComp(); if (!comp) return;
         if (!comp.markerProperty) return;
         var mp = comp.markerProperty, n = 0;
-        app.beginUndoGroup("清除切片標記");
+        app.beginUndoGroup("清除切標記");
         try {
             for (var i = mp.numKeys; i >= 1; i--) {
                 var v = mp.keyValue(i);
-                if (v && v.comment && v.comment.indexOf(SLICE_MARKER_PREFIX) === 0) { mp.removeKey(i); n++; }
+                if (v && v.comment && (v.comment === CUT_IN_MARK || v.comment === CUT_OUT_MARK)) { mp.removeKey(i); n++; }
             }
         } finally { app.endUndoGroup(); }
-        showStatus("已清除 " + n + " 個切片標記。");
+        showStatus("已清除 " + n + " 個切標記。");
     }
 
     // ================= 圖層工具 =================
@@ -1193,12 +1190,12 @@
         secAud.add("statictext", undefined, "帶入=把外層音檔放進內層預覽用(同步發聲);輸出前記得「移除帶入音檔」避免重複。");
 
         var rowAud3 = secAud.add("group");
-        rowAud3.add("statictext", undefined, "切片標記:").preferredSize.width = 56;
-        var bMarkSlice = rowAud3.add("button", undefined, "標記外層切片"); bMarkSlice.preferredSize.width = 110;
-        var bMarkClr   = rowAud3.add("button", undefined, "清除切片標記"); bMarkClr.preferredSize.width = 110;
-        bMarkSlice.helpTip = "依外層純音檔切片的入點,在目前內層合成的時間軸打上合成標記(註解=切片名),不放圖層、不發聲,純粹標位置。需兩邊 time 0 對齊。";
-        bMarkClr.helpTip   = "清除目前合成裡所有「★切片」標記,不影響其他標記。";
-        bMarkSlice.onClick = markOuterSlices;
+        rowAud3.add("statictext", undefined, "切標記:").preferredSize.width = 56;
+        var bMarkSlice = rowAud3.add("button", undefined, "切到precomp"); bMarkSlice.preferredSize.width = 110;
+        var bMarkClr   = rowAud3.add("button", undefined, "清除切標記");  bMarkClr.preferredSize.width = 110;
+        bMarkSlice.helpTip = "在外層選取一個圖層(=1 個 cut),依它在外層時間軸的兩端,往「該圖層的 precomp」塞兩個短標記(▸切入/◂切出)。進去 precomp 就看得到這段 cut 的起訖。";
+        bMarkClr.helpTip   = "清除目前合成裡的切標記(▸/◂),不影響其他 marker。";
+        bMarkSlice.onClick = markCutIntoPrecomp;
         bMarkClr.onClick   = clearSliceMarkers;
 
         // ── 圖層工具 ──
