@@ -918,23 +918,27 @@
         showStatus("已套漂浮到 " + sel.length + " 個圖層。");
     }
 
-    function doSway() {
+    // dir=+1 正向、-1 反向(相位相反,跟正向的圖層一起擺時會左右交錯)
+    function doSway(dir) {
         var comp = activeComp(); if (!comp) return;
         var sel = comp.selectedLayers;
         if (sel.length === 0) { alert("先選取圖層再按「擺動」。"); return; }
-        app.beginUndoGroup("擺動");
+        var sign = (dir < 0) ? -1 : 1;
+        app.beginUndoGroup(sign < 0 ? "擺動(反向)" : "擺動");
         try {
             for (var i = 0; i < sel.length; i++) {
                 sel[i].property("ADBE Transform Group").property("ADBE Rotate Z").expression = [
                     "// === 微微擺動(面板自動加入) ===",
                     "var amp = 3, period = 2.8; // 幅度(度) / 週期(秒)",
+                    "var dir = " + sign + ";          // 方向:1 正向、-1 反向",
                     "seedRandom(index, true);",
                     "var ph = random(0, period); // 每個圖層相位錯開",
-                    "value + amp * Math.sin((time + ph) * 2 * Math.PI / period)"
+                    "value + dir * amp * Math.sin((time + ph) * 2 * Math.PI / period)"
                 ].join("\n");
             }
         } finally { app.endUndoGroup(); }
-        showStatus("已套擺動到 " + sel.length + " 個圖層(Rotation ±3°)。建議先建控制NULL再套,避免跟其他旋轉表達式衝突。");
+        showStatus("已套" + (sign < 0 ? "反向" : "") + "擺動到 " + sel.length +
+            " 個圖層(Rotation ±3°)。建議先建控制NULL再套,避免跟其他旋轉表達式衝突。");
     }
 
     // 走路 / 跑步「上下浮動」:不套骨架,只在選取圖層的 Position(垂直彈跳)
@@ -2223,11 +2227,14 @@
         var bBr    = rowD.add("button", undefined, "呼吸(選取)"); bBr.preferredSize.width = 110;
         var bFl    = rowD.add("button", undefined, "漂浮(選取)"); bFl.preferredSize.width = 110;
         var bSway  = rowD.add("button", undefined, "擺動(選取)"); bSway.preferredSize.width = 110;
+        var bSwayR = rowD.add("button", undefined, "擺動反向"); bSwayR.preferredSize.width = 90;
+        bSwayR.helpTip = "相位相反的擺動。對另一組圖層套這個,就會跟正向擺動的圖層左右交錯。";
         bBlink.onClick = doBlink;
         bTalk.onClick  = doTalkSetup;
         bBr.onClick    = doBreath;
         bFl.onClick    = doFloat;
-        bSway.onClick  = doSway;
+        bSway.onClick  = function () { doSway(1); };
+        bSwayR.onClick = function () { doSway(-1); };
 
         p2.add("statictext", undefined, "節奏(用數字調,不用憑感覺拉 key):");
         var rowRt = p2.add("group");
