@@ -582,7 +582,7 @@
         var comp = activeComp(); if (!comp) return;
         if (isTopLevelComp(comp)) { alert("目前這個合成就是最外層(沒有更外層的音檔可帶入)。"); return; }
 
-        // 從所有頂層合成收集純音檔圖層
+        // 從所有頂層合成收集純音檔圖層(含每一刀切片,各自記住時間)
         var found = [];
         for (var i = 1; i <= app.project.numItems; i++) {
             var c = app.project.item(i);
@@ -590,21 +590,31 @@
             if (!isTopLevelComp(c)) continue;
             for (var j = 1; j <= c.numLayers; j++) {
                 var L = c.layer(j);
-                if (isPureAudioLayer(L)) {
-                    found.push({ src: L.source, startTime: L.startTime, inPoint: L.inPoint, outPoint: L.outPoint, name: L.name });
-                }
+                if (!isPureAudioLayer(L)) continue;
+                // 只帶「跟目前合成時間範圍有重疊」的切片(其餘在範圍外不會發聲,省得一堆)
+                if (L.outPoint <= 0 || L.startTime >= comp.duration) continue;
+                found.push({ src: L.source, startTime: L.startTime, inPoint: L.inPoint, outPoint: L.outPoint, name: L.name });
             }
         }
-        if (found.length === 0) { alert("在最外層(頂層合成)找不到純音檔圖層。"); return; }
+        if (found.length === 0) { alert("在最外層(頂層合成)找不到與此合成時間重疊的純音檔切片。"); return; }
+
+        // 比對是否已帶過:同來源 + 同起始時間 + 同入點才算重複(才能保留同檔多刀切片)
+        function sameSlice(layer, f) {
+            try {
+                return layer.source === f.src &&
+                    Math.abs(layer.startTime - f.startTime) < 1e-4 &&
+                    Math.abs(layer.inPoint - f.inPoint) < 1e-4;
+            } catch (e) { return false; }
+        }
 
         app.beginUndoGroup("帶入外層音檔");
         var added = 0, dup = 0;
         try {
             for (var f = 0; f < found.length; f++) {
-                // 同來源已在此合成就略過(避免重複)
+                // 這一刀(同來源+同時間)已在此合成就略過
                 var exists = false;
                 for (var k = 1; k <= comp.numLayers; k++) {
-                    try { if (comp.layer(k).source === found[f].src) { exists = true; break; } } catch (e) {}
+                    if (sameSlice(comp.layer(k), found[f])) { exists = true; break; }
                 }
                 if (exists) { dup++; continue; }
                 var nl = comp.layers.add(found[f].src);
@@ -616,8 +626,8 @@
                 added++;
             }
         } finally { app.endUndoGroup(); }
-        showStatus("已帶入 " + added + " 個外層音檔(預覽會同步發聲)" +
-            (dup ? "、" + dup + " 個已存在略過" : "") +
+        showStatus("已帶入 " + added + " 段外層音檔切片(每一刀各自對齊時間,等於還原整條音軌)" +
+            (dup ? "、" + dup + " 段已存在略過" : "") +
             "。★輸出前按「移除帶入音檔」清掉,免得跟外層重複發聲。");
     }
 
