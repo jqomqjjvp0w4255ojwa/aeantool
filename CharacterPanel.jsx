@@ -315,21 +315,23 @@
         return 1;
     }
 
-    // 列出某角色 control 的 mouth 滑桿每個值對應哪些嘴圖層(含閉嘴、靜態嘴、各種說話嘴),
-    // 給最外層的下拉選單用。回傳 [{ val, label, talk }](talk=是否為「說話嘴」家族),依值排序。
-    function listMouthShapes(comp) {
-        var mouthName = sliderNameFor(comp, "mouth");
+    // 列出某角色 control 的「指定滑桿」每個值對應哪些圖層(表情/狀態/嘴型),給最外層下拉用。
+    // role: "eye"/"mouth"/"眉"/"emo"。回傳 [{ val, label, talk }],依值排序。
+    function listSliderShapes(comp, role) {
+        var sliderName = sliderNameFor(comp, role);
         var byVal = {};
-        // 先標出哪些圖層屬於「說話嘴」家族(會開合)
+        // mouth 額外標出哪些值是「說話嘴」家族(會開合)
         var talkSet = {};
-        var talkFam = collectFeature(comp, "說話嘴");
-        for (var a = 0; a < talkFam.length; a++) { var tv = layerSliderVal(talkFam[a]); if (tv !== null) talkSet[tv] = true; }
+        if (role === "mouth") {
+            var talkFam = collectFeature(comp, "說話嘴");
+            for (var a = 0; a < talkFam.length; a++) { var tv = layerSliderVal(talkFam[a]); if (tv !== null) talkSet[tv] = true; }
+        }
         for (var i = 1; i <= comp.numLayers; i++) {
             try {
                 var op = opacityProp(comp.layer(i));
                 if (!op.expressionEnabled) continue;
                 var ex = op.expression;
-                if (ex.indexOf('effect("' + mouthName + '")') === -1) continue;
+                if (ex.indexOf('effect("' + sliderName + '")') === -1) continue;
                 var m = ex.match(new RegExp("==\\s*(\\d+)"));
                 if (!m) continue;
                 var val = parseInt(m[1], 10);
@@ -2396,48 +2398,53 @@
         rowT.add("statictext", undefined, "說話:");
         var bOn  = rowT.add("button", undefined, "▶ 開始說話"); bOn.preferredSize.width = 110;
         var bOff = rowT.add("button", undefined, "■ 停止說話"); bOff.preferredSize.width = 110;
+        bOn.onClick  = function () { var tc = targetComp(); if (!tc) return; remoteKey("mouth", talkValue(tc)); };
+        bOff.onClick = function () { remoteKey("mouth", 0); };
 
-        // 嘴型下拉:從最外層直接選要用哪張嘴(列出 control 的 mouth 滑桿每個值對應的圖層)。
-        // 「開始說話」會把 mouth 滑桿切到這裡選的值;沒選才退回第一張說話嘴。
-        var rowMouth = p3.add("group");
-        rowMouth.add("statictext", undefined, "嘴型:");
-        var mouthDrop = rowMouth.add("dropdownlist", undefined, []);
-        mouthDrop.preferredSize.width = 200;
-        var bMouthScan = rowMouth.add("button", undefined, "↻"); bMouthScan.preferredSize.width = 30;
-        var bMouthSet  = rowMouth.add("button", undefined, "切到此嘴型"); bMouthSet.preferredSize.width = 100;
-        var mouthShapes = [];
-        function refreshMouthDrop() {
-            mouthShapes = [];
-            mouthDrop.removeAll();
-            var tc = (lockedTarget ? lockedTarget.comp :
-                      (charDrop.selection ? rigComps[charDrop.selection.index] : null));
-            if (!tc) return;
+        // 通用表情/狀態列(一排涵蓋眼/嘴/眉/emo):選五官 → 值下拉自動列出對應圖層 → 下 HOLD key。
+        // 不用點進 control,從最外層即可切換所有滑桿狀態。
+        var GEN_ROLES = [
+            { label: "眼", role: "eye" },
+            { label: "嘴", role: "mouth" },
+            { label: "眉", role: "眉" },
+            { label: "emo", role: "emo" }
+        ];
+        var rowGen = p3.add("group");
+        rowGen.add("statictext", undefined, "表情:");
+        var roleDrop = rowGen.add("dropdownlist", undefined, []);
+        roleDrop.preferredSize.width = 56;
+        for (var gr = 0; gr < GEN_ROLES.length; gr++) roleDrop.add("item", GEN_ROLES[gr].label);
+        roleDrop.selection = 1; // 預設嘴
+        var valDrop = rowGen.add("dropdownlist", undefined, []);
+        valDrop.preferredSize.width = 180;
+        var bGenScan = rowGen.add("button", undefined, "↻"); bGenScan.preferredSize.width = 30;
+        var bGenSet  = rowGen.add("button", undefined, "下 HOLD key"); bGenSet.preferredSize.width = 100;
+        var genShapes = [];
+        function curGenTarget() {
+            return (lockedTarget ? lockedTarget.comp :
+                    (charDrop.selection ? rigComps[charDrop.selection.index] : null));
+        }
+        function refreshGenDrop() {
+            genShapes = [];
+            valDrop.removeAll();
+            var tc = curGenTarget();
+            if (!tc || !roleDrop.selection) return;
             try {
-                mouthShapes = listMouthShapes(tc);
-                for (var i = 0; i < mouthShapes.length; i++) mouthDrop.add("item", mouthShapes[i].label);
-                if (mouthDrop.items.length > 0) mouthDrop.selection = 0;
+                genShapes = listSliderShapes(tc, GEN_ROLES[roleDrop.selection.index].role);
+                for (var i = 0; i < genShapes.length; i++) valDrop.add("item", genShapes[i].label);
+                if (valDrop.items.length > 0) valDrop.selection = 0;
             } catch (e) {}
         }
-        refreshMouthDrop();
-        bMouthScan.onClick = refreshMouthDrop;
-        charDrop.onChange = function () { refreshMouthDrop(); };
-        // 重新掃描角色時順手刷新嘴型下拉
-        bScan.onClick = function () { refreshRigComps(); refreshMouthDrop(); };
-
-        // 取目前嘴型下拉選到的值;沒有就用第一張說話嘴
-        function selectedMouthVal(tc) {
-            if (mouthDrop.selection && mouthShapes[mouthDrop.selection.index]) {
-                return mouthShapes[mouthDrop.selection.index].val;
-            }
-            return talkValue(tc);
-        }
-
-        bOn.onClick  = function () { var tc = targetComp(); if (!tc) return; remoteKey("mouth", selectedMouthVal(tc)); };
-        bOff.onClick = function () { remoteKey("mouth", 0); };
-        bMouthSet.onClick = function () {
+        refreshGenDrop();
+        roleDrop.onChange = function () { refreshGenDrop(); };
+        bGenScan.onClick = refreshGenDrop;
+        charDrop.onChange = function () { refreshGenDrop(); };
+        // 重新掃描角色時順手刷新值下拉
+        bScan.onClick = function () { refreshRigComps(); refreshGenDrop(); };
+        bGenSet.onClick = function () {
             var tc = targetComp(); if (!tc) return;
-            if (!(mouthDrop.selection && mouthShapes[mouthDrop.selection.index])) { alert("先按 ↻ 掃描嘴型,再從下拉選一個。"); return; }
-            remoteKey("mouth", mouthShapes[mouthDrop.selection.index].val);
+            if (!(valDrop.selection && genShapes[valDrop.selection.index])) { alert("先按 ↻ 掃描,再從值下拉選一個。"); return; }
+            remoteKey(GEN_ROLES[roleDrop.selection.index].role, genShapes[valDrop.selection.index].val);
         };
 
         // ── 演出快捷鍵(對「目前合成裡選取的圖層」下 key,在哪一層都能用)──────────────
