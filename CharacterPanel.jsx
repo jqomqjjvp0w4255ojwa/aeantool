@@ -190,6 +190,16 @@
         return layer.property("ADBE Transform Group").property("ADBE Scale");
     }
 
+    // 把 control 上某滑桿切到指定值(讓剛標記、綁在該值的五官立刻看得到,不會因 opacity 0 像消失)。
+    function setSliderValue(comp, sliderName, val) {
+        try {
+            var ctrl = findLayer(comp, "control");
+            if (!ctrl) return;
+            var s = ctrl.property("ADBE Effect Parade").property(sliderName);
+            if (s) s.property(1).setValue(val);
+        } catch (e) {}
+    }
+
     // 讀某圖層不透明度表達式裡綁的滑桿值(switchExpr 寫的 == N),讀不到回傳 null
     function layerSliderVal(layer) {
         try {
@@ -643,6 +653,7 @@
             }
 
             var nulls = fullRig ? ensureRigNulls(comp) : null;
+            var lastSlider = null, lastVal = null;
 
             for (var i = 0; i < sel.length; i++) {
                 var lay = sel[i];
@@ -654,6 +665,7 @@
                     var sliderName = sliderNameFor(comp, tag.slider);
                     var v = allocSliderValue(comp, sliderName, tag.base);
                     opacityProp(lay).expression = switchExpr(sliderName, v);
+                    lastSlider = sliderName; lastVal = v;
                 }
                 if (nulls && !lay.parent) {
                     if (base === "耳") lay.parent = nulls.ear;
@@ -662,6 +674,8 @@
                     else if (tag.slider === "mouth") lay.parent = nulls.mouth;
                 }
             }
+            // 標記後把滑桿切到剛綁的值,讓這張立刻看得到(不會因 opacity 0 像沒生成)
+            if (lastSlider !== null) setSliderValue(comp, lastSlider, lastVal);
         } finally { app.endUndoGroup(); }
     }
 
