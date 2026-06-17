@@ -179,8 +179,7 @@
         return ctrl;
     }
 
-    function switchExpr(sliderName, val) {
-        return 'sliderValue = thisComp.layer("control").effect("' + sliderName + '")("Slider")\n\n' +
+    function switchExpr(sliderName, val) {        return 'sliderValue = thisComp.layer("control").effect("' + sliderName + '")("Slider")\n\n' +
                '// 設置透明度\nsliderValue == ' + val + '? 100 : 0\n';
     }
 
@@ -189,6 +188,16 @@
     }
     function scaleProp(layer) {
         return layer.property("ADBE Transform Group").property("ADBE Scale");
+    }
+
+    // 把 control 上某滑桿切到指定值(讓剛生成、綁在該值的五官立刻顯示,而不是因 opacity 0 變成「純路徑」)。
+    function setSliderValue(comp, sliderName, val) {
+        try {
+            var ctrl = findLayer(comp, "control");
+            if (!ctrl) return;
+            var s = ctrl.property("ADBE Effect Parade").property(sliderName);
+            if (s) s.property(1).setValue(val);
+        } catch (e) {}
     }
 
     // 讀某圖層不透明度表達式裡綁的滑桿值(switchExpr 寫的 == N),讀不到回傳 null
@@ -629,9 +638,12 @@
             if (!refLay) { alert("先標記一張「嘴」,或選取一張嘴圖層,再按「補說話嘴」。"); return; }
             var openLay = createOpenMouth(comp, refLay);
             openLay.name = "說話嘴";
-            opacityProp(openLay).expression = switchExpr(mouthName, nextSliderValue(comp, mouthName));
+            var tv = nextSliderValue(comp, mouthName);
+            opacityProp(openLay).expression = switchExpr(mouthName, tv);
             applyTalkSquash(comp, mouthName);
-            showStatus("已生成一張深色橢圓「說話嘴」並套上開合動態。請調整它的大小/顏色貼合畫風。");
+            setSliderValue(comp, mouthName, tv); // 切到此值,新嘴立刻可見(否則 opacity 0 看起來像純路徑)
+            showStatus("已生成一張深色橢圓「說話嘴」(綁 " + mouthName + "=" + tv +
+                  ",已切到該值讓它顯示)並套上開合動態。請調整它的大小/顏色貼合畫風。");
         } finally { app.endUndoGroup(); }
     }
 
@@ -648,9 +660,11 @@
             if (!refLay) { alert("先有一張「說話嘴」,或選取一張嘴圖層,再按「補閉嘴」。"); return; }
             var closedLay = createClosedMouth(comp, refLay);
             closedLay.name = "嘴";
-            opacityProp(closedLay).expression = switchExpr(mouthName, allocSliderValue(comp, mouthName, 0));
+            var cv = allocSliderValue(comp, mouthName, 0);
+            opacityProp(closedLay).expression = switchExpr(mouthName, cv);
+            setSliderValue(comp, mouthName, cv); // 切到此值,閉嘴線立刻可見(否則看起來像純路徑)
             showStatus("已生成一條「嘴」(閉嘴)線段,綁在 " + mouthName +
-                  " 值 0。可用鋼筆工具拉 Bezier 弧度、調 Stroke 配合畫風。");
+                  " 值 " + cv + "(已切到該值讓它顯示)。可用鋼筆工具拉 Bezier 弧度、調 Stroke 配合畫風。");
         } finally { app.endUndoGroup(); }
     }
 
@@ -667,9 +681,11 @@
             var idx = collectFeature(comp, "眉").length + 1; // 接在現有眉之後編號
             var nm = "眉 " + idx;
             var ph = createBrowPairLine(comp, refLay, nm);
-            opacityProp(ph).expression = switchExpr(browSliderName, allocSliderValue(comp, browSliderName, 0));
+            var bv = allocSliderValue(comp, browSliderName, 0);
+            opacityProp(ph).expression = switchExpr(browSliderName, bv);
+            setSliderValue(comp, browSliderName, bv); // 切到此值,新眉立刻可見(否則看起來像純路徑)
             showStatus("已生成眉毛佔位「" + nm + "」(一個形狀圖層、左右兩段線段),綁在 " +
-                  browSliderName + " 滑桿。改形狀/位置即可當挑眉、怒眉等表情;" +
+                  browSliderName + "=" + bv + "(已切到該值讓它顯示)。改形狀/位置即可當挑眉、怒眉等表情;" +
                   "要再加一種表情就複製它、選取後再按一次「補眉」。");
         } finally { app.endUndoGroup(); }
     }
