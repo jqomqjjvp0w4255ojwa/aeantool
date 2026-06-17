@@ -190,16 +190,6 @@
         return layer.property("ADBE Transform Group").property("ADBE Scale");
     }
 
-    // 把 control 上某滑桿切到指定值(讓剛生成、綁在該值的五官立刻顯示,而不是因 opacity 0 變成「純路徑」)。
-    function setSliderValue(comp, sliderName, val) {
-        try {
-            var ctrl = findLayer(comp, "control");
-            if (!ctrl) return;
-            var s = ctrl.property("ADBE Effect Parade").property(sliderName);
-            if (s) s.property(1).setValue(val);
-        } catch (e) {}
-    }
-
     // 讀某圖層不透明度表達式裡綁的滑桿值(switchExpr 寫的 == N),讀不到回傳 null
     function layerSliderVal(layer) {
         try {
@@ -386,39 +376,87 @@
     var PLACEHOLDER_RGB = [0.43137, 0.31373, 0.27843, 1];
 
     // 讓新生成的圖層跟參考圖層「同一個軸心」:複製參考層的錨點與位置(再把內容畫在錨點上),
-    // 這樣旋轉/擠壓的中心點完全一致,補出來的嘴/眉不會跟原圖偏位。回傳錨點(內容要畫在這)。
-    function matchPivot(shape, refLay) {
-        var rtg = refLay.property("ADBE Transform Group");
-        var a = rtg.property("ADBE Anchor Point").value;
-        var p = rtg.property("ADBE Position").value;
+    // 這樣旋轉/擠壓的中心點完全一致。沒有參考層時(refLay 為 null)就放在畫面中心。回傳錨點。
+    function matchPivot(shape, refLay, comp) {
+        var ax, ay;
         var stg = shape.property("ADBE Transform Group");
-        try { stg.property("ADBE Anchor Point").setValue([a[0], a[1]]); } catch (e1) {}
-        try { stg.property("ADBE Position").setValue([p[0], p[1]]); } catch (e2) {}
-        return [a[0], a[1]];
+        if (refLay) {
+            var rtg = refLay.property("ADBE Transform Group");
+            var a = rtg.property("ADBE Anchor Point").value;
+            var p = rtg.property("ADBE Position").value;
+            ax = a[0]; ay = a[1];
+            try { stg.property("ADBE Anchor Point").setValue([a[0], a[1]]); } catch (e1) {}
+            try { stg.property("ADBE Position").setValue([p[0], p[1]]); } catch (e2) {}
+        } else {
+            ax = comp.width / 2; ay = comp.height / 2;
+            try { stg.property("ADBE Anchor Point").setValue([ax, ay]); } catch (e3) {}
+            try { stg.property("ADBE Position").setValue([ax, ay]); } catch (e4) {}
+        }
+        return [ax, ay];
     }
 
-    // 只有「嘴」(閉著)的角色:自動生一張簡易說話嘴(深色橢圓 Shape)
-    function createOpenMouth(comp, closedLay) {
+    // 新生成圖層的擺位:有參考層就跟它同父層、疊在它前面;沒有就掛 face null(若有)、放最上面。
+    function placeGenShape(comp, shape, refLay) {
+        if (refLay) {
+            if (refLay.parent) { try { shape.parent = refLay.parent; } catch (e) {} }
+            try { shape.moveBefore(refLay); } catch (e2) {}
+        } else {
+            var fc = findLayer(comp, "face");
+            if (fc) { try { shape.parent = fc; } catch (e3) {} }
+        }
+    }
+
+    // 取生成時的參考層:優先用目前選取的圖層,其次找現有的同類五官,都沒有就回 null(放畫面中心)。
+    function genRefLayer(comp, featureNames) {
+        if (comp.selectedLayers.length) return comp.selectedLayers[0];
+        for (var i = 0; i < featureNames.length; i++) {
+            var f = findFeature(comp, featureNames[i]);
+            if (f) return f;
+        }
+        return null;
+    }
+
+    // 生成後只選取這一張新圖層,方便你接著直接按標記按鈕。
+    function selectOnly(comp, layer) {
+        for (var i = 1; i <= comp.numLayers; i++) { try { comp.layer(i).selected = false; } catch (e) {} }
+        try { layer.selected = true; } catch (e2) {}
+    }
+
+    // 一段 stroke 線(#6E5047,6px,兩端圓角)。逐項各自 try,避免某項丟錯害後面沒設到。
+    function addStrokedPath(pathGrp, verts) {
+        var pathProp = pathGrp.addProperty("ADBE Vector Shape - Group");
+        var myShape = new Shape();
+        myShape.vertices    = verts;
+        myShape.inTangents  = [[0, 0], [0, 0]];
+        myShape.outTangents = [[0, 0], [0, 0]];
+        myShape.closed = false;
+        pathProp.property("ADBE Vector Shape").setValue(myShape);
+        var stroke = pathGrp.addProperty("ADBE Vector Graphic - Stroke");
+        try { stroke.property("ADBE Vector Stroke Width").setValue(6); } catch (eW) {}
+        try { stroke.property("ADBE Vector Stroke Color").setValue(PLACEHOLDER_RGB); } catch (eC) {}
+        try { stroke.property("ADBE Vector Stroke Line Cap").setValue(2); } catch (eP) {}  // Round Cap
+        try { stroke.property("ADBE Vector Stroke Line Join").setValue(2); } catch (eJ) {} // Round Join
+    }
+
+    // 只生成一張「張嘴」深色橢圓 Shape(不綁滑桿,等你畫好/調好再手動點標記)。
+    function createOpenMouth(comp, refLay) {
         var w = 60, h = 40;
-        try { w = Math.max(closedLay.width * 0.8, 30); h = Math.max(closedLay.width * 0.55, 20); } catch (e) {}
+        try { w = Math.max(refLay.width * 0.8, 30); h = Math.max(refLay.width * 0.55, 20); } catch (e) {}
         var shape = comp.layers.addShape();
-        shape.name = "說話嘴";
+        shape.name = "張嘴(未綁)";
+        placeGenShape(comp, shape, refLay);
+        var a = matchPivot(shape, refLay, comp);
         var grp = shape.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
         grp.name = "mouth";
         var ell = grp.property("ADBE Vectors Group").addProperty("ADBE Vector Shape - Ellipse");
         ell.property("ADBE Vector Ellipse Size").setValue([w, h]);
+        try { ell.property("ADBE Vector Ellipse Position").setValue([a[0], a[1]]); } catch (eEP) {}
         var fill = grp.property("ADBE Vectors Group").addProperty("ADBE Vector Graphic - Fill");
         fill.property("ADBE Vector Fill Color").setValue([0.23, 0.12, 0.10, 1]);
-        shape.moveBefore(closedLay);
-        if (closedLay.parent) shape.parent = closedLay.parent;
-        // 跟閉嘴同軸心:錨點/位置對齊,橢圓畫在錨點上
-        var a = matchPivot(shape, closedLay);
-        try { ell.property("ADBE Vector Ellipse Position").setValue([a[0], a[1]]); } catch (eEP) {}
         return shape;
     }
 
-    // 在 refLay 位置生一條圓角端點短線段(#6E5047,6px,兩端圓角),長度參考 refLay 寬 * widthRatio。
-    // 給「閉嘴」「眉毛佔位」等需要簡單線段起點的場合共用,之後自己拉 Bezier 弧度/改形狀。
+    // 在 refLay 位置生一條圓角端點短線段(#6E5047,6px),不綁滑桿。給「閉嘴」等場合用。
     function createPlaceholderLine(comp, refLay, shapeName, groupName, widthRatio) {
         var lineW = 60;
         try { lineW = Math.max(refLay.width * widthRatio, 30); } catch (e) {}
@@ -426,77 +464,84 @@
 
         var shape = comp.layers.addShape();
         shape.name = shapeName;
-        if (refLay.parent) shape.parent = refLay.parent;
-        shape.moveBefore(refLay);
-        // 跟參考圖層同軸心:對齊錨點/位置,線段畫在錨點上
-        var a = matchPivot(shape, refLay);
+        placeGenShape(comp, shape, refLay);
+        var a = matchPivot(shape, refLay, comp);
 
-        var vectors = shape.property("ADBE Root Vectors Group");
-        var grp = vectors.addProperty("ADBE Vector Group");
+        var grp = shape.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
         grp.name = groupName;
-        var pathGrp = grp.property("ADBE Vectors Group");
-
-        // 路徑:以錨點為中心的水平直線,兩端之後可自行拉成曲線
-        var pathProp = pathGrp.addProperty("ADBE Vector Shape - Group");
-        var myShape = new Shape();
-        myShape.vertices    = [[a[0] - half, a[1]], [a[0] + half, a[1]]];
-        myShape.inTangents  = [[0, 0], [0, 0]];
-        myShape.outTangents = [[0, 0], [0, 0]];
-        myShape.closed = false;
-        pathProp.property("ADBE Vector Shape").setValue(myShape);
-
-        // Stroke:#6E5047,6px,兩端圓角。逐項各自 try,避免某項丟錯導致後面(尤其寬度)沒設到。
-        var stroke = pathGrp.addProperty("ADBE Vector Graphic - Stroke");
-        try { stroke.property("ADBE Vector Stroke Width").setValue(6); } catch (eW) {}
-        try { stroke.property("ADBE Vector Stroke Color").setValue(PLACEHOLDER_RGB); } catch (eC) {}
-        try { stroke.property("ADBE Vector Stroke Line Cap").setValue(2); } catch (eP) {}  // Round Cap
-        try { stroke.property("ADBE Vector Stroke Line Join").setValue(2); } catch (eJ) {} // Round Join
+        addStrokedPath(grp.property("ADBE Vectors Group"),
+            [[a[0] - half, a[1]], [a[0] + half, a[1]]]);
         return shape;
     }
 
-    // 眉毛佔位:在 refLay 位置生「一個」Shape Layer,內含「兩段」線段(左右眉各一條),
-    // 共用一層 stroke 風格。之後自己拉 Bezier 弧度/改形狀當挑眉、怒眉等表情。
-    function createBrowPairLine(comp, refLay, shapeName) {
+    // 成對線段(左右各一條):眉毛、閉眼共用。一個 Shape Layer 內含兩段線段,不綁滑桿。
+    function createPairLine(comp, refLay, shapeName, leftName, rightName, widthRatio, gapRatio) {
         var lineW = 36, gap = 40;
         try {
-            lineW = Math.max(refLay.width * 0.5, 24);
-            gap   = Math.max(refLay.width * 0.9, lineW * 1.6);
+            lineW = Math.max(refLay.width * widthRatio, 24);
+            gap   = Math.max(refLay.width * gapRatio, lineW * 1.6);
         } catch (e) {}
         var half = lineW / 2, off = gap / 2;
 
         var shape = comp.layers.addShape();
         shape.name = shapeName;
-        if (refLay.parent) shape.parent = refLay.parent;
-        shape.moveBefore(refLay);
-        // 跟參考圖層同軸心:對齊錨點/位置,眉線畫在錨點上
-        var a = matchPivot(shape, refLay);
+        placeGenShape(comp, shape, refLay);
+        var a = matchPivot(shape, refLay, comp);
         var vectors = shape.property("ADBE Root Vectors Group");
 
-        // 兩段:左眉(置於 -off)、右眉(置於 +off),各自一個 path group
-        var segs = [{ nm: "眉_左", cx: -off }, { nm: "眉_右", cx: off }];
+        var segs = [{ nm: leftName, cx: -off }, { nm: rightName, cx: off }];
         for (var s = 0; s < segs.length; s++) {
             var grp = vectors.addProperty("ADBE Vector Group");
             grp.name = segs[s].nm;
-            var pathGrp = grp.property("ADBE Vectors Group");
-            var pathProp = pathGrp.addProperty("ADBE Vector Shape - Group");
-            var myShape = new Shape();
-            myShape.vertices    = [[a[0] + segs[s].cx - half, a[1]], [a[0] + segs[s].cx + half, a[1]]];
-            myShape.inTangents  = [[0, 0], [0, 0]];
-            myShape.outTangents = [[0, 0], [0, 0]];
-            myShape.closed = false;
-            pathProp.property("ADBE Vector Shape").setValue(myShape);
-            var stroke = pathGrp.addProperty("ADBE Vector Graphic - Stroke");
-            try { stroke.property("ADBE Vector Stroke Width").setValue(6); } catch (eW) {}
-            try { stroke.property("ADBE Vector Stroke Color").setValue(PLACEHOLDER_RGB); } catch (eC) {}
-            try { stroke.property("ADBE Vector Stroke Line Cap").setValue(2); } catch (eP) {}  // Round Cap
-            try { stroke.property("ADBE Vector Stroke Line Join").setValue(2); } catch (eJ) {} // Round Join
+            addStrokedPath(grp.property("ADBE Vectors Group"),
+                [[a[0] + segs[s].cx - half, a[1]], [a[0] + segs[s].cx + half, a[1]]]);
         }
         return shape;
     }
 
-    // 只有張嘴/說話嘴圖的角色:在嘴軸中心生一條閉嘴線,長度參考嘴圖寬,讓你自己調 Bezier 弧度。
-    function createClosedMouth(comp, openLay) {
-        return createPlaceholderLine(comp, openLay, "嘴", "closed_mouth", 0.75);
+    // 補睜眼:一個 Shape Layer,左右各一隻眼 =「同色方橢圓(圓角矩形)+ 白色圓點」,不綁滑桿。
+    function createEyesPair(comp, refLay) {
+        var ew = 46, eh = 34, gap = 80;
+        try {
+            ew = Math.max(refLay.width * 0.45, 30);
+            eh = ew * 0.72;
+            gap = Math.max(refLay.width * 1.1, ew * 1.8);
+        } catch (e) {}
+        var off = gap / 2, dot = Math.max(Math.min(ew, eh) * 0.28, 5);
+
+        var shape = comp.layers.addShape();
+        shape.name = "眼(未綁)";
+        placeGenShape(comp, shape, refLay);
+        var a = matchPivot(shape, refLay, comp);
+        var vectors = shape.property("ADBE Root Vectors Group");
+
+        // 先加兩個白點群組(疊在最上面),再加兩個眼底群組(在下),確保白點在眼底之上
+        var eyes = [{ cx: -off, side: "左" }, { cx: off, side: "右" }];
+        for (var d = 0; d < eyes.length; d++) {
+            var gd = vectors.addProperty("ADBE Vector Group"); gd.name = "眼點_" + eyes[d].side;
+            var gdc = gd.property("ADBE Vectors Group");
+            var dotE = gdc.addProperty("ADBE Vector Shape - Ellipse");
+            dotE.property("ADBE Vector Ellipse Size").setValue([dot, dot]);
+            try { dotE.property("ADBE Vector Ellipse Position").setValue([a[0] + eyes[d].cx, a[1]]); } catch (eP) {}
+            var dotF = gdc.addProperty("ADBE Vector Graphic - Fill");
+            dotF.property("ADBE Vector Fill Color").setValue([1, 1, 1, 1]);
+        }
+        for (var b = 0; b < eyes.length; b++) {
+            var gb = vectors.addProperty("ADBE Vector Group"); gb.name = "眼底_" + eyes[b].side;
+            var gbc = gb.property("ADBE Vectors Group");
+            var rect = gbc.addProperty("ADBE Vector Shape - Rect");
+            rect.property("ADBE Vector Rect Size").setValue([ew, eh]);
+            try { rect.property("ADBE Vector Rect Position").setValue([a[0] + eyes[b].cx, a[1]]); } catch (eRP) {}
+            try { rect.property("ADBE Vector Rect Roundness").setValue(Math.min(ew, eh) * 0.45); } catch (eRR) {}
+            var rf = gbc.addProperty("ADBE Vector Graphic - Fill");
+            rf.property("ADBE Vector Fill Color").setValue(PLACEHOLDER_RGB);
+        }
+        return shape;
+    }
+
+    // 只有張嘴/說話嘴圖的角色:生一條閉嘴線(不綁滑桿)。
+    function createClosedMouth(comp, refLay) {
+        return createPlaceholderLine(comp, refLay, "閉嘴(未綁)", "closed_mouth", 0.75);
     }
 
     // ================= 1. 標記 =================
@@ -622,71 +667,66 @@
 
     // ================= 生成五官(獨立按鈕,不再綁在「標記」的副作用) =================
 
-    // 補說話嘴:沒有「說話嘴」時,從現有「嘴」(或選取圖層)生一張深色橢圓並套開合動態
-    function doGenTalkMouth() {
+    // 生成五官:只「畫出形狀佔位」,不綁滑桿、不切滑桿。畫好/調好後由你自己選取它、再點對應標記按鈕綁定。
+    // 位置參考:目前選取的圖層 > 現有同類五官 > 都沒有就放畫面中心。生成後自動只選取這張,方便接著標記。
+
+    // 補張嘴:深色橢圓張嘴
+    function doGenOpenMouth() {
         var comp = activeComp(); if (!comp) return;
-        app.beginUndoGroup("生成說話嘴");
+        app.beginUndoGroup("生成張嘴佔位");
         try {
-            ensureControl(comp);
-            var mouthName = sliderNameFor(comp, "mouth");
-            if (collectFeature(comp, "說話嘴").length > 0) {
-                alert("這個角色已經有「說話嘴」了。\n要再加一張請用「標記」的「說話嘴」按鈕複製現有嘴型。");
-                return;
-            }
-            var refLay = findFeature(comp, "嘴") ||
-                         (comp.selectedLayers.length ? comp.selectedLayers[0] : null);
-            if (!refLay) { alert("先標記一張「嘴」,或選取一張嘴圖層,再按「補說話嘴」。"); return; }
-            var openLay = createOpenMouth(comp, refLay);
-            openLay.name = "說話嘴";
-            var tv = nextSliderValue(comp, mouthName);
-            opacityProp(openLay).expression = switchExpr(mouthName, tv);
-            applyTalkSquash(comp, mouthName);
-            setSliderValue(comp, mouthName, tv); // 切到此值,新嘴立刻可見(否則 opacity 0 看起來像純路徑)
-            showStatus("已生成一張深色橢圓「說話嘴」(綁 " + mouthName + "=" + tv +
-                  ",已切到該值讓它顯示)並套上開合動態。請調整它的大小/顏色貼合畫風。");
+            var refLay = genRefLayer(comp, ["嘴", "說話嘴"]);
+            var lay = createOpenMouth(comp, refLay);
+            selectOnly(comp, lay);
+            showStatus("已生成「張嘴」佔位(未綁定)。調好大小/顏色後,選取它再點「說話嘴」或「嘴」標記按鈕綁滑桿。");
         } finally { app.endUndoGroup(); }
     }
 
-    // 補閉嘴:沒有「嘴」(閉嘴)時,從現有「說話嘴」(或選取圖層)位置生一條閉嘴線段,綁滑桿值 0
+    // 補閉嘴:一條閉嘴線
     function doGenClosedMouth() {
         var comp = activeComp(); if (!comp) return;
-        app.beginUndoGroup("生成閉嘴");
+        app.beginUndoGroup("生成閉嘴佔位");
         try {
-            ensureControl(comp);
-            var mouthName = sliderNameFor(comp, "mouth");
-            if (findFeature(comp, "嘴")) { alert("這個角色已經有「嘴」(閉嘴)了。"); return; }
-            var refLay = collectFeature(comp, "說話嘴")[0] ||
-                         (comp.selectedLayers.length ? comp.selectedLayers[0] : null);
-            if (!refLay) { alert("先有一張「說話嘴」,或選取一張嘴圖層,再按「補閉嘴」。"); return; }
-            var closedLay = createClosedMouth(comp, refLay);
-            closedLay.name = "嘴";
-            var cv = allocSliderValue(comp, mouthName, 0);
-            opacityProp(closedLay).expression = switchExpr(mouthName, cv);
-            setSliderValue(comp, mouthName, cv); // 切到此值,閉嘴線立刻可見(否則看起來像純路徑)
-            showStatus("已生成一條「嘴」(閉嘴)線段,綁在 " + mouthName +
-                  " 值 " + cv + "(已切到該值讓它顯示)。可用鋼筆工具拉 Bezier 弧度、調 Stroke 配合畫風。");
+            var refLay = genRefLayer(comp, ["嘴", "說話嘴"]);
+            var lay = createClosedMouth(comp, refLay);
+            selectOnly(comp, lay);
+            showStatus("已生成「閉嘴」線段佔位(未綁定)。拉好 Bezier 弧度後,選取它再點「嘴」標記按鈕綁滑桿。");
         } finally { app.endUndoGroup(); }
     }
 
-    // 補眉:在現有「眉」(或選取圖層)位置生「一個」Shape Layer(內含左右兩段線段),綁滑桿連號值。
+    // 補睜眼:同色方橢圓 + 白點 ×2
+    function doGenEyesOpen() {
+        var comp = activeComp(); if (!comp) return;
+        app.beginUndoGroup("生成睜眼佔位");
+        try {
+            var refLay = genRefLayer(comp, ["睜眼", "眼", "閉眼"]);
+            var lay = createEyesPair(comp, refLay);
+            selectOnly(comp, lay);
+            showStatus("已生成「睜眼」佔位(左右各一隻:方橢圓+白點,未綁定)。調好後選取它再點「睜眼」標記按鈕綁滑桿。");
+        } finally { app.endUndoGroup(); }
+    }
+
+    // 補閉眼:左右各一段線(跟眉毛同類),放在眼睛位置
+    function doGenClosedEye() {
+        var comp = activeComp(); if (!comp) return;
+        app.beginUndoGroup("生成閉眼佔位");
+        try {
+            var refLay = genRefLayer(comp, ["閉眼", "眼", "睜眼"]);
+            var lay = createPairLine(comp, refLay, "閉眼(未綁)", "閉眼_左", "閉眼_右", 0.5, 1.1);
+            selectOnly(comp, lay);
+            showStatus("已生成「閉眼」佔位(左右各一段線,未綁定)。拉好弧度後選取它再點「閉眼」標記按鈕綁滑桿。");
+        } finally { app.endUndoGroup(); }
+    }
+
+    // 補眉:一個 Shape Layer,左右兩段線段
     function doGenBrows() {
         var comp = activeComp(); if (!comp) return;
         app.beginUndoGroup("生成眉毛佔位");
         try {
-            ensureControl(comp);
-            var browSliderName = sliderNameFor(comp, "眉");
-            var refLay = findFeature(comp, "眉") ||
-                         (comp.selectedLayers.length ? comp.selectedLayers[0] : null);
-            if (!refLay) { alert("先標記一個「眉」,或選取一張眉圖層,再按「補眉」。"); return; }
-            var idx = collectFeature(comp, "眉").length + 1; // 接在現有眉之後編號
-            var nm = "眉 " + idx;
-            var ph = createBrowPairLine(comp, refLay, nm);
-            var bv = allocSliderValue(comp, browSliderName, 0);
-            opacityProp(ph).expression = switchExpr(browSliderName, bv);
-            setSliderValue(comp, browSliderName, bv); // 切到此值,新眉立刻可見(否則看起來像純路徑)
-            showStatus("已生成眉毛佔位「" + nm + "」(一個形狀圖層、左右兩段線段),綁在 " +
-                  browSliderName + "=" + bv + "(已切到該值讓它顯示)。改形狀/位置即可當挑眉、怒眉等表情;" +
-                  "要再加一種表情就複製它、選取後再按一次「補眉」。");
+            var refLay = genRefLayer(comp, ["眉"]);
+            var lay = createPairLine(comp, refLay, "眉(未綁)", "眉_左", "眉_右", 0.5, 0.9);
+            selectOnly(comp, lay);
+            showStatus("已生成「眉」佔位(左右兩段線,未綁定)。改好形狀後選取它再點「眉」標記按鈕綁滑桿。");
         } finally { app.endUndoGroup(); }
     }
 
@@ -1977,15 +2017,19 @@
         fullRigCheck = p1.add("checkbox", undefined, "完整綁定(建 face/eye/mouth/ear Null 並 parent)");
         fullRigCheck.value = false;
 
-        // ── 生成五官(獨立按鈕,只在你按下時才生成,標記按鈕不再有生成副作用)──
-        p1.add("statictext", undefined, "生成五官(缺哪個補哪個,標記不會自動生成):");
+        // ── 生成五官佔位(只畫形狀,不綁滑桿;畫好/調好後自己選取它再點上面的標記按鈕)──
+        p1.add("statictext", undefined, "生成佔位(只畫形狀、不綁滑桿;畫好後選取它再點標記按鈕):");
         var rowGen = p1.add("group");
-        var bGenTalk = rowGen.add("button", undefined, "補說話嘴"); bGenTalk.preferredSize.width = 72;
-        var bGenClose = rowGen.add("button", undefined, "補閉嘴");  bGenClose.preferredSize.width = 64;
-        var bGenBrow = rowGen.add("button", undefined, "補眉");     bGenBrow.preferredSize.width = 56;
-        bGenTalk.onClick = doGenTalkMouth;
+        var bGenMouth = rowGen.add("button", undefined, "補張嘴");  bGenMouth.preferredSize.width = 60;
+        var bGenClose = rowGen.add("button", undefined, "補閉嘴");  bGenClose.preferredSize.width = 60;
+        var bGenEye  = rowGen.add("button", undefined, "補睜眼");   bGenEye.preferredSize.width = 60;
+        var bGenCEye = rowGen.add("button", undefined, "補閉眼");   bGenCEye.preferredSize.width = 60;
+        var bGenBrow = rowGen.add("button", undefined, "補眉");     bGenBrow.preferredSize.width = 52;
+        bGenMouth.onClick = doGenOpenMouth;
         bGenClose.onClick = doGenClosedMouth;
-        bGenBrow.onClick = doGenBrows;
+        bGenEye.onClick   = doGenEyesOpen;
+        bGenCEye.onClick  = doGenClosedEye;
+        bGenBrow.onClick  = doGenBrows;
 
         // --- 命名 / 控制 NULL ---
         var p5 = TAB.name;
