@@ -315,6 +315,43 @@
         return 1;
     }
 
+    // 列出某角色 control 的 mouth 滑桿每個值對應哪些嘴圖層(含閉嘴、靜態嘴、各種說話嘴),
+    // 給最外層的下拉選單用。回傳 [{ val, label, talk }](talk=是否為「說話嘴」家族),依值排序。
+    function listMouthShapes(comp) {
+        var mouthName = sliderNameFor(comp, "mouth");
+        var byVal = {};
+        // 先標出哪些圖層屬於「說話嘴」家族(會開合)
+        var talkSet = {};
+        var talkFam = collectFeature(comp, "說話嘴");
+        for (var a = 0; a < talkFam.length; a++) { var tv = layerSliderVal(talkFam[a]); if (tv !== null) talkSet[tv] = true; }
+        for (var i = 1; i <= comp.numLayers; i++) {
+            try {
+                var op = opacityProp(comp.layer(i));
+                if (!op.expressionEnabled) continue;
+                var ex = op.expression;
+                if (ex.indexOf('effect("' + mouthName + '")') === -1) continue;
+                var m = ex.match(new RegExp("==\\s*(\\d+)"));
+                if (!m) continue;
+                var val = parseInt(m[1], 10);
+                if (!byVal[val]) byVal[val] = [];
+                byVal[val].push(comp.layer(i).name);
+            } catch (e) {}
+        }
+        var vals = [];
+        for (var k in byVal) if (byVal.hasOwnProperty(k)) vals.push(parseInt(k, 10));
+        vals.sort(function (x, y) { return x - y; });
+        var out = [];
+        for (var j = 0; j < vals.length; j++) {
+            var v = vals[j];
+            out.push({
+                val: v,
+                talk: !!talkSet[v],
+                label: v + ": " + byVal[v].join("/") + (talkSet[v] ? " (說話)" : "")
+            });
+        }
+        return out;
+    }
+
     // 在圖層錨點位置建一個「軸」Null,把圖層 parent 上去。
     // 擠壓表達式掛在軸的 Scale 上 → 把軸的 Rotation 轉到跟美術同角度,
     // 擠壓就沿著那個方向,斜的嘴/眼不會歪掉(skew)。
@@ -334,6 +371,21 @@
         return axis;
     }
 
+    // 佔位線段共用色:#6E5047(可自行再改)
+    var PLACEHOLDER_RGB = [0.43137, 0.31373, 0.27843, 1];
+
+    // 讓新生成的圖層跟參考圖層「同一個軸心」:複製參考層的錨點與位置(再把內容畫在錨點上),
+    // 這樣旋轉/擠壓的中心點完全一致,補出來的嘴/眉不會跟原圖偏位。回傳錨點(內容要畫在這)。
+    function matchPivot(shape, refLay) {
+        var rtg = refLay.property("ADBE Transform Group");
+        var a = rtg.property("ADBE Anchor Point").value;
+        var p = rtg.property("ADBE Position").value;
+        var stg = shape.property("ADBE Transform Group");
+        try { stg.property("ADBE Anchor Point").setValue([a[0], a[1]]); } catch (e1) {}
+        try { stg.property("ADBE Position").setValue([p[0], p[1]]); } catch (e2) {}
+        return [a[0], a[1]];
+    }
+
     // 只有「嘴」(閉著)的角色:自動生一張簡易說話嘴(深色橢圓 Shape)
     function createOpenMouth(comp, closedLay) {
         var w = 60, h = 40;
@@ -348,12 +400,13 @@
         fill.property("ADBE Vector Fill Color").setValue([0.23, 0.12, 0.10, 1]);
         shape.moveBefore(closedLay);
         if (closedLay.parent) shape.parent = closedLay.parent;
-        shape.property("ADBE Transform Group").property("ADBE Position")
-            .setValue(closedLay.property("ADBE Transform Group").property("ADBE Position").value);
+        // 跟閉嘴同軸心:錨點/位置對齊,橢圓畫在錨點上
+        var a = matchPivot(shape, closedLay);
+        try { ell.property("ADBE Vector Ellipse Position").setValue([a[0], a[1]]); } catch (eEP) {}
         return shape;
     }
 
-    // 在 refLay 位置生一條圓角端點短線段(#7E594C,6px),長度參考 refLay 寬 * widthRatio。
+    // 在 refLay 位置生一條圓角端點短線段(#6E5047,6px,兩端圓角),長度參考 refLay 寬 * widthRatio。
     // 給「閉嘴」「眉毛佔位」等需要簡單線段起點的場合共用,之後自己拉 Bezier 弧度/改形狀。
     function createPlaceholderLine(comp, refLay, shapeName, groupName, widthRatio) {
         var lineW = 60;
@@ -362,30 +415,31 @@
 
         var shape = comp.layers.addShape();
         shape.name = shapeName;
+        if (refLay.parent) shape.parent = refLay.parent;
+        shape.moveBefore(refLay);
+        // 跟參考圖層同軸心:對齊錨點/位置,線段畫在錨點上
+        var a = matchPivot(shape, refLay);
+
         var vectors = shape.property("ADBE Root Vectors Group");
         var grp = vectors.addProperty("ADBE Vector Group");
         grp.name = groupName;
         var pathGrp = grp.property("ADBE Vectors Group");
 
-        // 路徑:水平直線,兩端之後可自行拉成曲線
+        // 路徑:以錨點為中心的水平直線,兩端之後可自行拉成曲線
         var pathProp = pathGrp.addProperty("ADBE Vector Shape - Group");
         var myShape = new Shape();
-        myShape.vertices    = [[-half, 0], [half, 0]];
+        myShape.vertices    = [[a[0] - half, a[1]], [a[0] + half, a[1]]];
         myShape.inTangents  = [[0, 0], [0, 0]];
         myShape.outTangents = [[0, 0], [0, 0]];
         myShape.closed = false;
         pathProp.property("ADBE Vector Shape").setValue(myShape);
 
-        // Stroke:#7E594C,圓角端點,6px(可自行調粗細)
+        // Stroke:#6E5047,圓角端點,6px(可自行調粗細)
         var stroke = pathGrp.addProperty("ADBE Vector Graphic - Stroke");
-        stroke.property("ADBE Vector Stroke Color").setValue([0.494, 0.349, 0.298, 1]);
+        stroke.property("ADBE Vector Stroke Color").setValue(PLACEHOLDER_RGB);
         stroke.property("ADBE Vector Stroke Width").setValue(6);
         stroke.property("ADBE Vector Stroke Line Cap").setValue(2); // Round Cap
-
-        var pos = refLay.property("ADBE Transform Group").property("ADBE Position").value;
-        shape.property("ADBE Transform Group").property("ADBE Position").setValue(pos);
-        if (refLay.parent) shape.parent = refLay.parent;
-        shape.moveBefore(refLay);
+        try { stroke.property("ADBE Vector Stroke Line Join").setValue(2); } catch (eJ) {} // Round Join
         return shape;
     }
 
@@ -401,6 +455,10 @@
 
         var shape = comp.layers.addShape();
         shape.name = shapeName;
+        if (refLay.parent) shape.parent = refLay.parent;
+        shape.moveBefore(refLay);
+        // 跟參考圖層同軸心:對齊錨點/位置,眉線畫在錨點上
+        var a = matchPivot(shape, refLay);
         var vectors = shape.property("ADBE Root Vectors Group");
 
         // 兩段:左眉(置於 -off)、右眉(置於 +off),各自一個 path group
@@ -411,21 +469,17 @@
             var pathGrp = grp.property("ADBE Vectors Group");
             var pathProp = pathGrp.addProperty("ADBE Vector Shape - Group");
             var myShape = new Shape();
-            myShape.vertices    = [[segs[s].cx - half, 0], [segs[s].cx + half, 0]];
+            myShape.vertices    = [[a[0] + segs[s].cx - half, a[1]], [a[0] + segs[s].cx + half, a[1]]];
             myShape.inTangents  = [[0, 0], [0, 0]];
             myShape.outTangents = [[0, 0], [0, 0]];
             myShape.closed = false;
             pathProp.property("ADBE Vector Shape").setValue(myShape);
             var stroke = pathGrp.addProperty("ADBE Vector Graphic - Stroke");
-            stroke.property("ADBE Vector Stroke Color").setValue([0.494, 0.349, 0.298, 1]);
+            stroke.property("ADBE Vector Stroke Color").setValue(PLACEHOLDER_RGB);
             stroke.property("ADBE Vector Stroke Width").setValue(6);
             stroke.property("ADBE Vector Stroke Line Cap").setValue(2); // Round Cap
+            try { stroke.property("ADBE Vector Stroke Line Join").setValue(2); } catch (eJ) {} // Round Join
         }
-
-        var pos = refLay.property("ADBE Transform Group").property("ADBE Position").value;
-        shape.property("ADBE Transform Group").property("ADBE Position").setValue(pos);
-        if (refLay.parent) shape.parent = refLay.parent;
-        shape.moveBefore(refLay);
         return shape;
     }
 
@@ -2342,8 +2396,49 @@
         rowT.add("statictext", undefined, "說話:");
         var bOn  = rowT.add("button", undefined, "▶ 開始說話"); bOn.preferredSize.width = 110;
         var bOff = rowT.add("button", undefined, "■ 停止說話"); bOff.preferredSize.width = 110;
-        bOn.onClick  = function () { var tc = targetComp(); if (!tc) return; remoteKey("mouth", talkValue(tc)); };
+
+        // 嘴型下拉:從最外層直接選要用哪張嘴(列出 control 的 mouth 滑桿每個值對應的圖層)。
+        // 「開始說話」會把 mouth 滑桿切到這裡選的值;沒選才退回第一張說話嘴。
+        var rowMouth = p3.add("group");
+        rowMouth.add("statictext", undefined, "嘴型:");
+        var mouthDrop = rowMouth.add("dropdownlist", undefined, []);
+        mouthDrop.preferredSize.width = 200;
+        var bMouthScan = rowMouth.add("button", undefined, "↻"); bMouthScan.preferredSize.width = 30;
+        var bMouthSet  = rowMouth.add("button", undefined, "切到此嘴型"); bMouthSet.preferredSize.width = 100;
+        var mouthShapes = [];
+        function refreshMouthDrop() {
+            mouthShapes = [];
+            mouthDrop.removeAll();
+            var tc = (lockedTarget ? lockedTarget.comp :
+                      (charDrop.selection ? rigComps[charDrop.selection.index] : null));
+            if (!tc) return;
+            try {
+                mouthShapes = listMouthShapes(tc);
+                for (var i = 0; i < mouthShapes.length; i++) mouthDrop.add("item", mouthShapes[i].label);
+                if (mouthDrop.items.length > 0) mouthDrop.selection = 0;
+            } catch (e) {}
+        }
+        refreshMouthDrop();
+        bMouthScan.onClick = refreshMouthDrop;
+        charDrop.onChange = function () { refreshMouthDrop(); };
+        // 重新掃描角色時順手刷新嘴型下拉
+        bScan.onClick = function () { refreshRigComps(); refreshMouthDrop(); };
+
+        // 取目前嘴型下拉選到的值;沒有就用第一張說話嘴
+        function selectedMouthVal(tc) {
+            if (mouthDrop.selection && mouthShapes[mouthDrop.selection.index]) {
+                return mouthShapes[mouthDrop.selection.index].val;
+            }
+            return talkValue(tc);
+        }
+
+        bOn.onClick  = function () { var tc = targetComp(); if (!tc) return; remoteKey("mouth", selectedMouthVal(tc)); };
         bOff.onClick = function () { remoteKey("mouth", 0); };
+        bMouthSet.onClick = function () {
+            var tc = targetComp(); if (!tc) return;
+            if (!(mouthDrop.selection && mouthShapes[mouthDrop.selection.index])) { alert("先按 ↻ 掃描嘴型,再從下拉選一個。"); return; }
+            remoteKey("mouth", mouthShapes[mouthDrop.selection.index].val);
+        };
 
         // ── 演出快捷鍵(對「目前合成裡選取的圖層」下 key,在哪一層都能用)──────────────
         p3.add("statictext", undefined, "演出快捷鍵(嚇一跳/翻轉/閃爍):在任一合成選取圖層即可,沒選才用上面鎖定的角色:");
