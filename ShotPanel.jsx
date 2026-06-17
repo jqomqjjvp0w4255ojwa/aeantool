@@ -519,6 +519,47 @@
             "已移除全專案 " + n + " 個代理,全部回到原圖。");
     }
 
+    // 判斷圖層來源是不是「純音檔」(有聲音、沒畫面的素材,例如 .wav/.mp3)。
+    function isPureAudioLayer(lay) {
+        try {
+            var src = lay.source;
+            return (src instanceof FootageItem) && src.hasAudio && !src.hasVideo;
+        } catch (e) { return false; }
+    }
+
+    // 靜音「非純音檔」的所有圖層:影片素材、含聲音的預合成等都關掉 audio,
+    // 只留下純音檔(對白/音樂軌)發聲。對目前合成操作。
+    function muteNonAudioFiles() {
+        var comp = activeComp(); if (!comp) return;
+        var muted = 0, kept = 0;
+        app.beginUndoGroup("靜音非音檔");
+        try {
+            for (var i = 1; i <= comp.numLayers; i++) {
+                var lay = comp.layer(i);
+                if (!lay.hasAudio) continue;          // 沒聲音的圖層不用管
+                if (isPureAudioLayer(lay)) { kept++; continue; }
+                try { lay.audioEnabled = false; muted++; } catch (e) {}
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已靜音 " + muted + " 個非音檔圖層,保留 " + kept +
+            " 個純音檔發聲。按「還原聲音」開回全部。");
+    }
+
+    // 還原:把目前合成所有有聲音的圖層 audio 開回來。
+    function restoreAllAudio() {
+        var comp = activeComp(); if (!comp) return;
+        var n = 0;
+        app.beginUndoGroup("還原聲音");
+        try {
+            for (var i = 1; i <= comp.numLayers; i++) {
+                var lay = comp.layer(i);
+                if (!lay.hasAudio) continue;
+                try { lay.audioEnabled = true; n++; } catch (e) {}
+            }
+        } finally { app.endUndoGroup(); }
+        showStatus("已開回 " + n + " 個圖層的聲音。");
+    }
+
     // ================= 圖層工具 =================
 
     // 一鍵清除選取圖層上的所有效果
@@ -973,6 +1014,15 @@
         bPxOn.onClick   = function () { proxyUseAll(true); };
         bPxOff.onClick  = function () { proxyRemoveAll(); };
         secPv.add("statictext", undefined, "代理=不會動的大插圖換成靜圖替身,預覽變輕;畫面看起來不變正常。輸出前按「全部還原原圖」。");
+
+        var rowAud = secPv.add("group");
+        rowAud.add("statictext", undefined, "聲音:").preferredSize.width = 56;
+        var bAudMute = rowAud.add("button", undefined, "靜音非音檔"); bAudMute.preferredSize.width = 100;
+        var bAudOn   = rowAud.add("button", undefined, "還原聲音");   bAudOn.preferredSize.width = 90;
+        bAudMute.helpTip = "把目前合成裡「影片素材/含聲音的預合成」等非純音檔圖層靜音,只留純音檔(對白/音樂軌)發聲。";
+        bAudOn.helpTip   = "把目前合成所有圖層的聲音開回來。";
+        bAudMute.onClick = muteNonAudioFiles;
+        bAudOn.onClick   = restoreAllAudio;
 
         // ── 圖層工具 ──
         var secLay = section("圖層");
