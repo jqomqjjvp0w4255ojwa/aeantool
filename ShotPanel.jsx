@@ -1100,7 +1100,9 @@
         bPxOff.onClick  = function () { proxyRemoveAll(); };
         secPv.add("statictext", undefined, "代理=不會動的大插圖換成靜圖替身,預覽變輕;畫面看起來不變正常。輸出前按「全部還原原圖」。");
 
-        var rowAud = secPv.add("group");
+        // ── 聲音 ──
+        var secAud = section("聲音");
+        var rowAud = secAud.add("group");
         rowAud.add("statictext", undefined, "聲音:").preferredSize.width = 56;
         var bAudMute = rowAud.add("button", undefined, "靜音非音檔"); bAudMute.preferredSize.width = 100;
         var bAudOn   = rowAud.add("button", undefined, "還原聲音");   bAudOn.preferredSize.width = 90;
@@ -1109,7 +1111,7 @@
         bAudMute.onClick = muteNonAudioFiles;
         bAudOn.onClick   = restoreAllAudio;
 
-        var rowAud2 = secPv.add("group");
+        var rowAud2 = secAud.add("group");
         rowAud2.add("statictext", undefined, "外層音:").preferredSize.width = 56;
         var bAudBring = rowAud2.add("button", undefined, "帶入外層音檔"); bAudBring.preferredSize.width = 110;
         var bAudDrop  = rowAud2.add("button", undefined, "移除帶入音檔"); bAudDrop.preferredSize.width = 110;
@@ -1117,7 +1119,7 @@
         bAudDrop.helpTip  = "移除目前合成裡所有「帶入的外層音檔」。輸出前按,避免和外層重複發聲。";
         bAudBring.onClick = bringInOuterAudio;
         bAudDrop.onClick  = removeBroughtInAudio;
-        secPv.add("statictext", undefined, "帶入=把外層音檔放進內層預覽用(同步發聲);輸出前記得「移除帶入音檔」避免重複。");
+        secAud.add("statictext", undefined, "帶入=把外層音檔放進內層預覽用(同步發聲);輸出前記得「移除帶入音檔」避免重複。");
 
         // ── 圖層工具 ──
         var secLay = section("圖層");
