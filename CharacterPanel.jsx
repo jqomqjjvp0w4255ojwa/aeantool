@@ -436,11 +436,11 @@
         myShape.closed = false;
         pathProp.property("ADBE Vector Shape").setValue(myShape);
 
-        // Stroke:#6E5047,圓角端點,6px(可自行調粗細)
+        // Stroke:#6E5047,6px,兩端圓角。逐項各自 try,避免某項丟錯導致後面(尤其寬度)沒設到。
         var stroke = pathGrp.addProperty("ADBE Vector Graphic - Stroke");
-        stroke.property("ADBE Vector Stroke Color").setValue(PLACEHOLDER_RGB);
-        stroke.property("ADBE Vector Stroke Width").setValue(6);
-        stroke.property("ADBE Vector Stroke Line Cap").setValue(2); // Round Cap
+        try { stroke.property("ADBE Vector Stroke Width").setValue(6); } catch (eW) {}
+        try { stroke.property("ADBE Vector Stroke Color").setValue(PLACEHOLDER_RGB); } catch (eC) {}
+        try { stroke.property("ADBE Vector Stroke Line Cap").setValue(2); } catch (eP) {}  // Round Cap
         try { stroke.property("ADBE Vector Stroke Line Join").setValue(2); } catch (eJ) {} // Round Join
         return shape;
     }
@@ -477,9 +477,9 @@
             myShape.closed = false;
             pathProp.property("ADBE Vector Shape").setValue(myShape);
             var stroke = pathGrp.addProperty("ADBE Vector Graphic - Stroke");
-            stroke.property("ADBE Vector Stroke Color").setValue(PLACEHOLDER_RGB);
-            stroke.property("ADBE Vector Stroke Width").setValue(6);
-            stroke.property("ADBE Vector Stroke Line Cap").setValue(2); // Round Cap
+            try { stroke.property("ADBE Vector Stroke Width").setValue(6); } catch (eW) {}
+            try { stroke.property("ADBE Vector Stroke Color").setValue(PLACEHOLDER_RGB); } catch (eC) {}
+            try { stroke.property("ADBE Vector Stroke Line Cap").setValue(2); } catch (eP) {}  // Round Cap
             try { stroke.property("ADBE Vector Stroke Line Join").setValue(2); } catch (eJ) {} // Round Join
         }
         return shape;
@@ -2306,10 +2306,10 @@
         var rowLock = rowChar;   // 跟「角色」下拉同一列
         var bLock = rowLock.add("button", undefined, "選取圖層"); bLock.preferredSize.width = 80;
         var bUnlock = rowLock.add("button", undefined, "解除"); bUnlock.preferredSize.width = 50;
-        var bCtrlFx = rowLock.add("button", undefined, "control"); bCtrlFx.preferredSize.width = 70;
-        bCtrlFx.helpTip = "開啟目前角色的 control 圖層特效面板:自動進到 control 所在合成、選取它,並叫出左邊的 Effect Controls,跟手動點進去一樣。";
+        var bCtrlFx = rowLock.add("button", undefined, "C"); bCtrlFx.preferredSize.width = 28;
+        bCtrlFx.helpTip = "開啟目前角色 control 的特效面板:自動進到 control 所在合成、選取它,並叫出左邊的 Effect Controls,跟手動點進去一樣。";
         var lockLabel = rowLock.add("statictext", undefined, "(用左側下拉)");
-        lockLabel.preferredSize.width = 150;
+        lockLabel.preferredSize.width = 110;
         bLock.onClick = function () {
             var c = app.project.activeItem;
             if (!(c instanceof CompItem)) { alert("先點開外層合成,選取角色圖層再按此按鈕。"); return; }
