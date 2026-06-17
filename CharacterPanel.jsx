@@ -567,6 +567,7 @@
         "睜眼":   { slider: "eye",   base: 0 },
         "嘴":     { slider: "mouth", base: 0 },          // 嘴型(靜態),值連號 0、1、2…
         "說話嘴": { slider: "mouth", talkCopy: true },   // 把選取的嘴複製成壓縮開合動態,接在最大值後
+        "張嘴":   { slider: "mouth", talkBind: true },   // 直接把選取圖層綁成說話嘴(不複製),適合素材本身就是張嘴圖
         "眉":     { slider: "眉",    base: 0 },
         "特效":   { slider: "emo",   base: 1 }, // 廣義表情特效:汗滴、怒氣、驚訝符號、愛心…都可掛在 emo 滑桿上
         "耳":     { slider: null },
@@ -649,6 +650,26 @@
                 showStatus("已新增 " + made + " 張說話嘴(壓縮開合動態),原嘴型不變。共用一個「嘴軸」:" +
                       lines.join("、") + "。演出時把 " + mouthName +
                       " 滑桿切到對應值就會說話開合;切到原本的嘴型值則是靜態嘴。");
+                return;
+            }
+
+            // 「張嘴」:把選取圖層「本身」綁成說話嘴(不複製),預設值從 1 起(把 0 留給閉嘴)
+            if (tag.talkBind) {
+                var mName = sliderNameFor(comp, "mouth");
+                var bv = null;
+                for (var tb = 0; tb < sel.length; tb++) {
+                    var L = sel[tb];
+                    var bIdx = countByBase(comp, "說話嘴");
+                    L.name = (bIdx === 0) ? "說話嘴" : "說話嘴 " + (bIdx + 1);
+                    bv = allocSliderValue(comp, mName, 1); // 第一張說話嘴=1,之後連號
+                    opacityProp(L).expression = switchExpr(mName, bv);
+                }
+                var info2 = applyTalkSquash(comp, mName); // 套共用嘴軸開合(嘴軸放在這張嘴的位置)
+                if (bv !== null) setSliderValue(comp, mName, bv);
+                var ln2 = [];
+                for (var q = 0; q < info2.length; q++) ln2.push("「" + info2[q].name + "」= " + info2[q].val);
+                showStatus("已把選取圖層直接綁成「說話嘴」(沒有複製,原圖就在 slider 選項裡):" + ln2.join("、") +
+                      "。記得另外用「補閉嘴」生成一張閉嘴並標記「嘴」(會綁值 0),停止說話才有閉嘴可顯示。");
                 return;
             }
 
@@ -1992,7 +2013,7 @@
         var p1 = TAB.mark;
         p1.add("statictext", undefined, "先選圖層再按按鈕:  [v2.0]");
         var rowA = p1.add("group"); var rowB = p1.add("group");
-        var tagOrder = ["閉眼", "睜眼", "嘴", "說話嘴", "眉", "特效", "耳", "鼻"];
+        var tagOrder = ["閉眼", "睜眼", "嘴", "說話嘴", "張嘴", "眉", "特效", "耳", "鼻"];
         var fullRigCheck;
         for (var i = 0; i < tagOrder.length; i++) {
             var row = (i < 4) ? rowA : rowB;
