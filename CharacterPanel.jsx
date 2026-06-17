@@ -2306,6 +2306,8 @@
         var rowLock = rowChar;   // 跟「角色」下拉同一列
         var bLock = rowLock.add("button", undefined, "選取圖層"); bLock.preferredSize.width = 80;
         var bUnlock = rowLock.add("button", undefined, "解除"); bUnlock.preferredSize.width = 50;
+        var bCtrlFx = rowLock.add("button", undefined, "control"); bCtrlFx.preferredSize.width = 70;
+        bCtrlFx.helpTip = "開啟目前角色的 control 圖層特效面板:自動進到 control 所在合成、選取它,並叫出左邊的 Effect Controls,跟手動點進去一樣。";
         var lockLabel = rowLock.add("statictext", undefined, "(用左側下拉)");
         lockLabel.preferredSize.width = 150;
         bLock.onClick = function () {
@@ -2361,6 +2363,29 @@
             if (!charDrop.selection) { alert("先按 ↻ 掃描專案,再從下拉選角色(有 control 的合成),\n或用「鎖定選取角色圖層」。"); return null; }
             return rigComps[charDrop.selection.index];
         }
+
+        // 一鍵叫出 control 的 Effect Controls:進到 control 所在合成、選取它,並開啟特效控制面板。
+        // 等同手動點進角色裡選 control,但不用自己挖層級。
+        bCtrlFx.onClick = function () {
+            var tc = targetComp(); if (!tc) return;
+            var ctrl = findLayer(tc, "control");
+            if (!ctrl) { alert("這個角色的合成「" + tc.name + "」裡找不到名為 control 的圖層。"); return; }
+            try { tc.openInViewer(); } catch (eO) {}        // 把 control 所在合成開到前景
+            try {
+                for (var i = 1; i <= tc.numLayers; i++) tc.layer(i).selected = false;
+                ctrl.selected = true;                        // 只選 control
+            } catch (eS) {}
+            // 叫出 Effect Controls 面板(選取 control 後它就會顯示 control 的滑桿)
+            var opened = false;
+            try {
+                var id = app.findMenuCommandId("Effect Controls");  // 各語系名稱不同時可能找不到
+                if (id) { app.executeCommandId(id); opened = true; }
+            } catch (eM) {}
+            if (!opened) { try { app.executeCommandId(2163); opened = true; } catch (eC) {} } // 常見的 Effect Controls 指令 ID
+            showStatus(opened
+                ? "已選取「" + tc.name + "」的 control 並叫出 Effect Controls 面板。"
+                : "已選取「" + tc.name + "」的 control。若左側沒跳出 Effect Controls,按一下 F3 或 Window 選單開啟即可。");
+        };
 
         // 用「目前開著的合成」的時間下 key(你們所有合成都是同一條全片時間軸)
         // 若鎖定的是外層合成裡的角色層,沿著 layerChain 一路把外層時間換算成最內層 control 合成的時間。
