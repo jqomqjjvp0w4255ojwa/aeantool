@@ -10,7 +10,7 @@
 //
 //   運鏡   選鏡頭層 → 開頭設起幀 → 結尾設迄幀(自動補 Position+Scale + 緩動)
 //   切鏡   選整疊圖層 → 切下一鏡(複製整疊、保留父子、對齊下個標記)
-//   預覽   對畫面卡時:關陰影/模糊、降解析度、工作區框到本鏡、靜圖代理
+//   預覽   對畫面卡時:關陰影/模糊、工作區框到本鏡、Solo 本鏡
 
 (function (thisObj) {
 
@@ -229,33 +229,39 @@
     var _soloCache = null; // { comp: CompItem, items: [{ layer, solo }] }
     function soloShot(on) {
         var comp = activeComp(); if (!comp) return;
-        if (on) {
-            var sel = comp.selectedLayers;
-            if (sel.length === 0) { alert("先選取本鏡圖層,再按 Solo。"); return; }
-            var items = [];
-            for (var i = 1; i <= comp.numLayers; i++) {
-                var lay = comp.layer(i);
-                items.push({ layer: lay, solo: lay.solo });
-                lay.solo = false;
-            }
-            _soloCache = { comp: comp, items: items };
-            for (var j = 0; j < sel.length; j++) { try { sel[j].solo = true; } catch (e) {} }
-            showStatus("Solo 本鏡(" + sel.length + " 個圖層)。按「還原 Solo」回到原狀。");
-        } else {
-            // 只有快取屬於目前 comp 時才照原狀還原;否則只把目前 comp 的 solo 全清掉
-            if (_soloCache && _soloCache.comp === comp) {
-                for (var k = 0; k < _soloCache.items.length; k++) {
-                    try { _soloCache.items[k].layer.solo = _soloCache.items[k].solo; } catch (e) {}
+        app.beginUndoGroup(on ? "Solo 本鏡" : "還原 Solo");
+        try {
+            if (on) {
+                var sel = comp.selectedLayers;
+                if (sel.length === 0) { alert("先選取本鏡圖層,再按 Solo。"); return; }
+                var items = [];
+                for (var i = 1; i <= comp.numLayers; i++) {
+                    var lay = comp.layer(i);
+                    items.push({ layer: lay, solo: lay.solo });
+                    if (lay.solo) { try { lay.solo = false; } catch (e0) {} }
                 }
-                _soloCache = null;
-                showStatus("已還原 Solo。");
+                _soloCache = { comp: comp, items: items };
+                var done = 0;
+                for (var j = 0; j < sel.length; j++) {
+                    try { sel[j].solo = true; done++; } catch (e) {}
+                }
+                showStatus("Solo 本鏡(" + done + "/" + sel.length + " 個圖層)。按「還原 Solo」回到原狀。");
             } else {
-                for (var m = 1; m <= comp.numLayers; m++) {
-                    try { comp.layer(m).solo = false; } catch (e) {}
+                // 只有快取屬於目前 comp 時才照原狀還原;否則只把目前 comp 的 solo 全清掉
+                if (_soloCache && _soloCache.comp === comp) {
+                    for (var k = 0; k < _soloCache.items.length; k++) {
+                        try { _soloCache.items[k].layer.solo = _soloCache.items[k].solo; } catch (e) {}
+                    }
+                    _soloCache = null;
+                    showStatus("已還原 Solo。");
+                } else {
+                    for (var m = 1; m <= comp.numLayers; m++) {
+                        try { comp.layer(m).solo = false; } catch (e) {}
+                    }
+                    showStatus("已清除本合成所有 Solo。");
                 }
-                showStatus("已清除本合成所有 Solo。");
             }
-        }
+        } finally { app.endUndoGroup(); }
     }
 
     // ================= 切鏡 =================
@@ -389,14 +395,6 @@
         showStatus("工作區已還原為整段(0 ~ " + comp.duration.toFixed(2) + "s)。");
     }
 
-    // 預覽解析度切換(Full=1 / Half=2 / Third=3)
-    function setPreviewRes(factor) {
-        var comp = activeComp(); if (!comp) return;
-        try { comp.resolutionFactor = [factor, factor]; } catch (e) {}
-        var label = (factor === 1) ? "Full" : (factor === 2 ? "Half" : "Third");
-        showStatus("預覽解析度已切到 " + label + "。對畫面時用低解析度、輸出前記得切回 Full。");
-    }
-
     // 編輯時關特效:把目前合成裡的 Drop Shadow/模糊效果 + 調整圖層暫時關掉,讓對畫面變順。
     // on=false 關、on=true 開回來。
     function toggleHeavyFx(on) {
@@ -423,52 +421,6 @@
             adjCount + " 個調整層" + (on ? "。" : "(編輯時用,輸出前按「還原特效」)。"));
     }
 
-    // 靜圖代理:把選取圖層的「來源合成」算成一張 PNG 當 proxy,預覽輕量、輸出可切回。
-    // 只適合「不會動的大插圖 precomp」;內含動畫(眨眼/嘴)的套了會凍結。
-    function makeStillProxy() {
-        var comp = activeComp(); if (!comp) return;
-        var sel = comp.selectedLayers;
-        if (sel.length === 0) { alert("先選取要做代理的圖層(來源是合成的大插圖),再按。"); return; }
-
-        var dir;
-        try {
-            dir = (app.project.file)
-                ? new Folder(app.project.file.parent.fsName + "/_proxy")
-                : new Folder(Folder.temp.fsName + "/AE_proxy");
-            if (!dir.exists) dir.create();
-        } catch (eF) { alert("無法建立 proxy 資料夾。"); return; }
-
-        var done = 0, skip = [];
-        app.beginUndoGroup("建立靜圖代理");
-        try {
-            for (var i = 0; i < sel.length; i++) {
-                var src = sel[i].source;
-                if (!(src instanceof CompItem)) { skip.push(sel[i].name + "(來源不是合成)"); continue; }
-                try {
-                    var f = new File(dir.fsName + "/" + src.name.replace(/[\\\/:*?"<>|]/g, "_") + "_proxy.png");
-                    src.saveFrameToPng(src.time, f);
-                    src.setProxy(f);
-                    done++;
-                } catch (eS) { skip.push(sel[i].name + "(算圖失敗)"); }
-            }
-        } finally { app.endUndoGroup(); }
-        showStatus("已對 " + done + " 個來源合成建立靜圖代理(預覽變輕)。" +
-            (skip.length ? "略過:" + skip.join("、") + "。" : "") +
-            "輸出前要原圖,用「代理 關」切掉。");
-    }
-
-    // 切換選取圖層來源的 proxy 開/關
-    function toggleProxyUse(use) {
-        var comp = activeComp(); if (!comp) return;
-        var sel = comp.selectedLayers;
-        if (sel.length === 0) { alert("先選取圖層,再切換代理開/關。"); return; }
-        var n = 0;
-        for (var i = 0; i < sel.length; i++) {
-            var src = sel[i].source;
-            try { if (src && src.hasProxy) { src.useProxy = use; n++; } } catch (e) {}
-        }
-        showStatus("已把 " + n + " 個來源的代理切到「" + (use ? "開(輕量預覽)" : "關(原圖)") + "」。");
-    }
 
     // ================= 圖層工具 =================
 
@@ -897,15 +849,6 @@
         bFxOff.onClick = function () { toggleHeavyFx(false); };
         bFxOn.onClick  = function () { toggleHeavyFx(true); };
 
-        var rowRes = secPv.add("group");
-        rowRes.add("statictext", undefined, "解析度:").preferredSize.width = 56;
-        var bResH = rowRes.add("button", undefined, "Half");  bResH.preferredSize.width = 56;
-        var bResT = rowRes.add("button", undefined, "Third"); bResT.preferredSize.width = 56;
-        var bResF = rowRes.add("button", undefined, "Full");  bResF.preferredSize.width = 56;
-        bResH.onClick = function () { setPreviewRes(2); };
-        bResT.onClick = function () { setPreviewRes(3); };
-        bResF.onClick = function () { setPreviewRes(1); };
-
         var rowWA = secPv.add("group");
         rowWA.add("statictext", undefined, "播放範圍:").preferredSize.width = 56;
         var bWA = rowWA.add("button", undefined, "框到選取鏡"); bWA.preferredSize.width = 100;
@@ -920,16 +863,6 @@
         bSoloOff.helpTip = "還原所有圖層的 Solo 狀態。";
         bSolo.onClick    = function () { soloShot(true); };
         bSoloOff.onClick = function () { soloShot(false); };
-
-        var rowPx = secPv.add("group");
-        rowPx.add("statictext", undefined, "代理:").preferredSize.width = 56;
-        var bPxMake = rowPx.add("button", undefined, "建靜圖代理"); bPxMake.preferredSize.width = 90;
-        var bPxOff  = rowPx.add("button", undefined, "代理關"); bPxOff.preferredSize.width = 56;
-        var bPxOn   = rowPx.add("button", undefined, "代理開"); bPxOn.preferredSize.width = 56;
-        bPxMake.onClick = makeStillProxy;
-        bPxOff.onClick  = function () { toggleProxyUse(false); };
-        bPxOn.onClick   = function () { toggleProxyUse(true); };
-        secPv.add("statictext", undefined, "代理只給「不會動的大插圖」;會動的(眨眼/嘴)套了會凍結");
 
         // ── 圖層工具 ──
         var secLay = section("圖層");
