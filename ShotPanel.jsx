@@ -606,7 +606,7 @@
                 if (!isPureAudioLayer(L)) continue;
                 // 只帶「跟目前合成時間範圍有重疊」的切片(其餘在範圍外不會發聲,省得一堆)
                 if (L.outPoint <= 0 || L.startTime >= comp.duration) continue;
-                found.push({ src: L.source, startTime: L.startTime, inPoint: L.inPoint, outPoint: L.outPoint, name: L.name });
+                found.push({ src: L.source, startTime: L.startTime, inPoint: L.inPoint, outPoint: L.outPoint, stretch: L.stretch, name: L.name });
             }
         }
         if (found.length === 0) { alert("在最外層(頂層合成)找不到與此合成時間重疊的純音檔切片。"); return; }
@@ -632,6 +632,8 @@
                 if (exists) { dup++; continue; }
                 var nl = comp.layers.add(found[f].src);
                 nl.name = BROUGHT_AUDIO_PREFIX + found[f].name;
+                // 忠實還原:先 stretch、再 startTime,最後 in/out 修剪(順序避免 in>out 報錯)
+                try { if (found[f].stretch) nl.stretch = found[f].stretch; } catch (e0) {}
                 try { nl.startTime = found[f].startTime; } catch (e1) {}
                 try { nl.outPoint = found[f].outPoint; } catch (e2) {}
                 try { nl.inPoint = found[f].inPoint; } catch (e3) {}
