@@ -459,6 +459,28 @@
     }
 
     // 只生成一張「張嘴」深色橢圓 Shape(不綁滑桿,等你畫好/調好再手動點標記)。
+    // 用 4 個錨點 + bezier 把橢圓畫成「可編輯路徑」(不是參數化 Ellipse)。
+    // 參數化 Ellipse 在 AE 裡只能改 Size/Position 數字,沒辦法用選取工具拖錨點/把手調整形狀;
+    // 改成路徑後跟「閉嘴」線段一樣,可以直接在合成視窗拖點、拖把手調圓潤度或捏成其他形狀。
+    function addOvalPath(pathGrp, cx, cy, w, h) {
+        var rx = w / 2, ry = h / 2;
+        var k = 0.5523; // bezier 圓形近似常數
+        var pathProp = pathGrp.addProperty("ADBE Vector Shape - Group");
+        var myShape = new Shape();
+        myShape.vertices = [
+            [cx, cy - ry], [cx + rx, cy], [cx, cy + ry], [cx - rx, cy]
+        ];
+        myShape.inTangents = [
+            [-rx * k, 0], [0, -ry * k], [rx * k, 0], [0, ry * k]
+        ];
+        myShape.outTangents = [
+            [rx * k, 0], [0, ry * k], [-rx * k, 0], [0, -ry * k]
+        ];
+        myShape.closed = true;
+        pathProp.property("ADBE Vector Shape").setValue(myShape);
+        return pathProp;
+    }
+
     function createOpenMouth(comp, refLay) {
         var w = 60, h = 40;
         try { w = Math.max(refLay.width * 0.8, 30); h = Math.max(refLay.width * 0.55, 20); } catch (e) {}
@@ -468,9 +490,7 @@
         var a = matchPivot(shape, refLay, comp);
         var grp = shape.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
         grp.name = "mouth";
-        var ell = grp.property("ADBE Vectors Group").addProperty("ADBE Vector Shape - Ellipse");
-        ell.property("ADBE Vector Ellipse Size").setValue([w, h]);
-        try { ell.property("ADBE Vector Ellipse Position").setValue([a[0], a[1]]); } catch (eEP) {}
+        addOvalPath(grp.property("ADBE Vectors Group"), a[0], a[1], w, h);
         var fill = grp.property("ADBE Vectors Group").addProperty("ADBE Vector Graphic - Fill");
         fill.property("ADBE Vector Fill Color").setValue([0.9569, 0.4824, 0.4549, 1]); // #F47B74
         return shape;
