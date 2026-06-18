@@ -325,6 +325,15 @@
         return 1;
     }
 
+    // 「停止說話」要切回的值:取「閉嘴」實際綁的值。
+    // 閉嘴不一定剛好是 0(例如閉嘴是最後才補的,0 已被別張嘴占走),
+    // 所以不能寫死 0,要去讀閉嘴真正綁到哪個值,否則會切到沒有任何嘴的空白格。
+    function closedValue(comp) {
+        var c = findFeature(comp, "閉嘴");
+        if (c) { var v = layerSliderVal(c); if (v !== null) return v; }
+        return 0; // 真的找不到閉嘴才退回 0
+    }
+
     // 列出某角色 control 的「指定滑桿」每個值對應哪些圖層(表情/狀態/嘴型),給最外層下拉用。
     // role: "eye"/"mouth"/"眉"/"emo"。回傳 [{ val, label, talk }],依值排序。
     function listSliderShapes(comp, role) {
@@ -2521,7 +2530,7 @@
         var bOn  = rowT.add("button", undefined, "▶ 開始說話"); bOn.preferredSize.width = 110;
         var bOff = rowT.add("button", undefined, "■ 停止說話"); bOff.preferredSize.width = 110;
         bOn.onClick  = function () { var tc = targetComp(); if (!tc) return; remoteKey("mouth", talkValue(tc)); };
-        bOff.onClick = function () { remoteKey("mouth", 0); };
+        bOff.onClick = function () { var tc = targetComp(); if (!tc) return; remoteKey("mouth", closedValue(tc)); };
 
         // 通用表情/狀態列(一排涵蓋眼/嘴/眉/emo):選五官 → 值下拉自動列出對應圖層 → 下 HOLD key。
         // 不用點進 control,從最外層即可切換所有滑桿狀態。
