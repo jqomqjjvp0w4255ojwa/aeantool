@@ -619,6 +619,26 @@
         return { face: faceN, eye: eyeN, mouth: mouthN, ear: earN };
     }
 
+    // 從圖層名判斷它目前是哪個標記的基準名(例如「開嘴 2」→「開嘴」),不是任何標記名就回 null。
+    function tagBaseOfName(name) {
+        for (var b in TAGS) {
+            if (!TAGS.hasOwnProperty(b)) continue;
+            if (name === b || name.indexOf(b + " ") === 0) return b;
+        }
+        return null;
+    }
+
+    // 如果這張圖層已經被標記過「別的」標記(例如先標了「開嘴」,現在要改標「說話嘴」),
+    // 直接改名會把舊標記覆蓋掉、原本的狀態就消失了。
+    // 改成:偵測到衝突就自動複製一張出來標新的,原圖維持舊標記不動,兩種狀態都保留。
+    function duplicateIfConflictingTag(lay, newBase) {
+        var oldBase = tagBaseOfName(lay.name);
+        if (oldBase === null || oldBase === newBase) return lay;
+        var dup = lay.duplicate();
+        showStatus("「" + lay.name + "」已經標記過「" + oldBase + "」,自動複製一張來改標「" + newBase + "」,原圖的「" + oldBase + "」保留不變。");
+        return dup;
+    }
+
     function doTag(base, fullRig) {
         var comp = activeComp(); if (!comp) return;
         var sel = comp.selectedLayers;
@@ -635,7 +655,7 @@
                 var mName = sliderNameFor(comp, "mouth");
                 var bv = null;
                 for (var tb = 0; tb < sel.length; tb++) {
-                    var L = sel[tb];
+                    var L = duplicateIfConflictingTag(sel[tb], "說話嘴");
                     var bIdx = countByBase(comp, "說話嘴");
                     L.name = (bIdx === 0) ? "說話嘴" : "說話嘴 " + (bIdx + 1);
                     bv = allocSliderValue(comp, mName, 1); // 第一張說話嘴=1,之後連號
@@ -654,7 +674,7 @@
             var lastSlider = null, lastVal = null;
 
             for (var i = 0; i < sel.length; i++) {
-                var lay = sel[i];
+                var lay = duplicateIfConflictingTag(sel[i], base);
                 var idx = countByBase(comp, base); // 已有幾個同名 → 決定編號
                 lay.name = (idx === 0) ? base : base + " " + (idx + 1);
 
